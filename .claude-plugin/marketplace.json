@@ -1,0 +1,11 @@
+{
+  "name": "yummybait",
+  "owner": { "name": "Yummybait" },
+  "plugins": [
+    {
+      "name": "uniswap-tx-builder",
+      "source": "./",
+      "description": "Build unsigned Uniswap v3 liquidity-position transactions and hand the calldata to your own wallet to sign. Pairs with the uniswap-tx-builder MCP."
+    }
+  ]
+}

@@ -43,10 +43,12 @@ Set `MCP_HTTP_PORT` to serve the streamable-HTTP transport instead of stdio (end
 MCP_HTTP_PORT=8102 npm run dev
 ```
 
-Docker:
+Docker — build locally, or pull a released image from GHCR:
 
 ```bash
-docker build -t uniswap-tx-builder-mcp:local .
+docker build -t uniswap-tx-builder-mcp:local .                        # local build
+docker pull ghcr.io/yummybait-fin/uniswap-tx-builder-mcp:latest       # released image
+
 docker run -i --rm uniswap-tx-builder-mcp:local                       # stdio
 docker run --rm -p 8102:8102 -e MCP_HTTP_PORT=8102 uniswap-tx-builder-mcp:local  # HTTP
 ```
@@ -78,19 +80,33 @@ For HTTP, run the server with `MCP_HTTP_PORT` and point the client at `http://<h
 
 ## Install the companion skill
 
-`skill/uniswap-tx-builder/` is a generic agent **skill** (no app- or wallet-specific knowledge)
+`skills/uniswap-tx-builder/` is a generic agent **skill** (no app- or wallet-specific knowledge)
 that teaches an agent how to drive these tools: the argument reference, simulate-first, the
 close→mint rebalance sequence, and the "your wallet signs" handoff. It pairs with the MCP — install
-both.
+both. Pick whichever install path suits you.
 
-For **Claude Code**, copy the skill folder into a skills directory:
+**A. Claude Code plugin (`/plugin`)** — the repo doubles as a plugin marketplace:
+
+```text
+/plugin marketplace add Yummybait-fin/uniswap-tx-builder-mcp
+/plugin install uniswap-tx-builder@yummybait
+```
+
+**B. npx** — copies the skill into a skills dir (no clone needed):
 
 ```bash
-# personal (available in every project)
-cp -r skill/uniswap-tx-builder ~/.claude/skills/
+# personal (~/.claude/skills, every project)
+npx -p github:Yummybait-fin/uniswap-tx-builder-mcp uniswap-tx-builder-skill
 
-# or project-scoped (checked in with a repo)
-mkdir -p .claude/skills && cp -r skill/uniswap-tx-builder .claude/skills/
+# or project-scoped (./.claude/skills, checked in with a repo)
+npx -p github:Yummybait-fin/uniswap-tx-builder-mcp uniswap-tx-builder-skill --project
+```
+
+**C. Manual copy** — straight from a checkout:
+
+```bash
+cp -r skills/uniswap-tx-builder ~/.claude/skills/                       # personal
+mkdir -p .claude/skills && cp -r skills/uniswap-tx-builder .claude/skills/  # project
 ```
 
 The agent picks it up by its `SKILL.md` frontmatter — no restart needed for project skills.
@@ -118,6 +134,23 @@ builder.ts     calldata encoding (viem) + position reads
 ticks.ts       pure price ↔ tick math (no I/O)
 operations.ts  build + optional eth_call simulate + response shaping
 mcp.ts         the MCP transport (stdio / streamable HTTP)
+```
+
+## CI / releases
+
+GitHub Actions (`.github/workflows/`):
+
+- **CI** — typecheck + tests on every push to `main` and on PRs.
+- **Release** — pushing a `v*` tag re-runs the tests, bumps the version on `main` to match the tag
+  (`package.json` + `.claude-plugin/plugin.json`), then builds and publishes the Docker image to
+  GHCR (`ghcr.io/yummybait-fin/uniswap-tx-builder-mcp`), tagged with the version (and `latest`).
+  The bump lands on `main` after the tag, so the tagged commit keeps its old version.
+
+`package.json` is the single source of version truth: the MCP server reads it at startup (so the
+`version` it reports always matches), and the release job keeps `plugin.json` in lockstep.
+
+```bash
+git tag v0.3.0 && git push origin v0.3.0   # cut a release
 ```
 
 ## Scope

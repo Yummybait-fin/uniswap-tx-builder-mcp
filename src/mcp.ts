@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -29,7 +30,13 @@ const addressSchema = z
 // uint256 token ids / amounts exceed JS safe integers → accept decimal strings.
 const uintStringSchema = z.string().regex(/^\d+$/, "must be a decimal integer string");
 
-const server = new McpServer({ name: "uniswap-tx-builder", version: "0.3.0" });
+// Single-source the version from package.json (resolves from src/ in dev and
+// dist/ once built — package.json sits one level up in both layouts).
+const { version } = createRequire(import.meta.url)("../package.json") as {
+  version: string;
+};
+
+const server = new McpServer({ name: "uniswap-tx-builder", version });
 
 function ok(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data) }] };
