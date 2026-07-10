@@ -1,6 +1,6 @@
 {
   "name": "@yummybait/uniswap-tx-builder-mcp",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Keyless MCP server that builds unsigned Uniswap v3 liquidity-position transactions (collect, close, mint, increase, wrap/swap via Universal Router) and simulates them — you sign with your own wallet.",
   "license": "Apache-2.0",
   "type": "module",

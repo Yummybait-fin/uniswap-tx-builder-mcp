@@ -1,7 +1,7 @@
 {
   "name": "uniswap-tx-builder",
   "description": "Skill for driving the uniswap-tx-builder MCP: build unsigned Uniswap v3 liquidity-position transactions (collect, close/burn, mint, increase, plan), simulate them, and sign with your own wallet.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "author": {
     "name": "Yummybait"
   },
