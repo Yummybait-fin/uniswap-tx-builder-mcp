@@ -11,7 +11,9 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "declaration": true,
-    "sourceMap": true
+    "sourceMap": true,
+    // Explicit: TypeScript 7 (native) doesn't auto-include node_modules/@types.
+    "types": ["node"]
   },
   "include": ["src"],
   "exclude": ["node_modules", "dist"]
