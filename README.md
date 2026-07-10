@@ -35,6 +35,14 @@ reference and position lifecycle.
 
 ## Install & run
 
+From npm (no clone, stdio transport — what MCP clients spawn):
+
+```bash
+npx -y @yummybait/uniswap-tx-builder-mcp
+```
+
+From source:
+
 ```bash
 npm install
 npm run dev                 # stdio MCP from source via tsx
@@ -62,11 +70,10 @@ docker run --rm -p 8102:8102 -e MCP_HTTP_PORT=8102 uniswap-tx-builder-mcp:local 
 
 ## Connect to an MCP client
 
-**Claude Code** (stdio, from a local build):
+**Claude Code** (stdio via npm):
 
 ```bash
-npm run build
-claude mcp add uniswap-tx-builder -- node /abs/path/to/uniswap-tx-builder-mcp/dist/mcp.js
+claude mcp add uniswap-tx-builder -- npx -y @yummybait/uniswap-tx-builder-mcp
 ```
 
 **Generic client config** (Claude Desktop, etc.) — add to the client's `mcpServers`:
@@ -75,13 +82,15 @@ claude mcp add uniswap-tx-builder -- node /abs/path/to/uniswap-tx-builder-mcp/di
 {
   "mcpServers": {
     "uniswap-tx-builder": {
-      "command": "node",
-      "args": ["/abs/path/to/uniswap-tx-builder-mcp/dist/mcp.js"],
+      "command": "npx",
+      "args": ["-y", "@yummybait/uniswap-tx-builder-mcp"],
       "env": { "RPC_ETH": "https://your-eth-rpc" }
     }
   }
 }
 ```
+
+(For a local build, swap the command for `node /abs/path/to/uniswap-tx-builder-mcp/dist/mcp.js`.)
 
 For HTTP, run the server with `MCP_HTTP_PORT` and point the client at `http://<host>:<port>/mcp`.
 
@@ -103,10 +112,10 @@ both. Pick whichever install path suits you.
 
 ```bash
 # personal (~/.claude/skills, every project)
-npx -p github:Yummybait-fin/uniswap-tx-builder-mcp uniswap-tx-builder-skill
+npx -p @yummybait/uniswap-tx-builder-mcp uniswap-tx-builder-skill
 
 # or project-scoped (./.claude/skills, checked in with a repo)
-npx -p github:Yummybait-fin/uniswap-tx-builder-mcp uniswap-tx-builder-skill --project
+npx -p @yummybait/uniswap-tx-builder-mcp uniswap-tx-builder-skill --project
 ```
 
 **C. Manual copy** — straight from a checkout:
@@ -147,18 +156,38 @@ mcp.ts         the MCP transport (stdio / stateless streamable HTTP)
 
 GitHub Actions (`.github/workflows/`):
 
-- **CI** — typecheck + tests on every push to `main` and on PRs.
+- **CI** — typecheck + tests + npm-tarball allowlist check on every push to `main` and on PRs.
 - **Release** — pushing a `v*` tag re-runs the tests, bumps the version on `main` to match the tag
-  (`package.json` + `.claude-plugin/plugin.json`), then builds and publishes the Docker image to
-  GHCR (`ghcr.io/yummybait-fin/uniswap-tx-builder-mcp`), tagged with the version (and `latest`).
-  The bump lands on `main` after the tag, so the tagged commit keeps its old version.
-
-`package.json` is the single source of version truth: the MCP server reads it at startup (so the
-`version` it reports always matches), and the release job keeps `plugin.json` in lockstep.
+  (`package.json` + `.claude-plugin/plugin.json`), publishes the npm package
+  (`@yummybait/uniswap-tx-builder-mcp`) **with provenance**, and builds + publishes the Docker
+  image to GHCR (`ghcr.io/yummybait-fin/uniswap-tx-builder-mcp`), tagged with the version (and
+  `latest`). The tag is the single version source for both artifacts; the bump lands on `main`
+  after the tag, so the tagged commit keeps its old version.
 
 ```bash
 git tag v0.3.0 && git push origin v0.3.0   # cut a release
 ```
+
+### npm supply-chain posture
+
+The npm publish job is locked down; keep these properties when touching it:
+
+- **Trusted publishing (OIDC)** — no long-lived npm token in CI. Configured on npmjs.com under
+  *package → Settings → Trusted publisher* (GitHub Actions, this repo, `release.yml`). The
+  `NPM_TOKEN` secret path in the workflow exists **only to bootstrap the first release** (trusted
+  publishers can't be configured before the package exists) — delete the secret afterwards and
+  set the package's publishing access to *"Require two-factor authentication and disallow
+  tokens"*.
+- **Provenance** — `publishConfig.provenance: true` attaches a Sigstore attestation linking every
+  published tarball to the exact workflow run and commit. It also makes an accidental local
+  `npm publish` fail (no OIDC outside CI). Consumers verify with `npm audit signatures`.
+- **Gates before publish** — `npm audit signatures` (registry attestations of the dep tree),
+  `npm audit --omit=dev --audit-level=high` (no known high/critical vulns in shipped deps),
+  typecheck + full test suite (`prepublishOnly`), and `scripts/verify-tarball.mjs` (the tarball
+  must contain exactly the allowlisted files — no secrets, no strays).
+- **Hardened job** — `npm ci --ignore-scripts` (no dependency postinstall runs where publish
+  credentials live), minimal per-job permissions, actions pinned to commit SHAs, Dependabot
+  keeping pins and deps fresh.
 
 ## Scope
 

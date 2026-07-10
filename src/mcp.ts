@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createRequire } from "node:module";
