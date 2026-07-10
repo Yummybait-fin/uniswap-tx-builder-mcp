@@ -10,9 +10,11 @@ threat surface is just "it returns calldata and reads public RPCs."
 
 ## Tools
 
-Every build tool returns `tx = { to, data, value, chainId }` (`value` is always `"0"`) plus a
-human `description`. Addresses are `0x…40`; `positionId` and amounts are decimal **strings** (they
-exceed JS safe integers).
+Every build tool returns `tx = { to, data, value, chainId }` plus `rlp` — the **unsigned
+EIP-1559 (type-2)** serialization of `tx` with nonce/fees/gas zeroed (signing services like the
+CDP API populate them; serialize `tx` yourself if you manage nonces) — and a human `description`.
+`value` is `"0"` except the payable Universal Router wrap/swap builds. Addresses are `0x…40`;
+`positionId` and amounts are decimal **strings** (they exceed JS safe integers).
 
 | Tool | Purpose |
 |------|---------|
@@ -20,12 +22,16 @@ exceed JS safe integers).
 | `build_close` | Remove all liquidity **+** collect; `burn: true` also burns the empty NFT. Returns the read position. |
 | `build_mint` | Mint a new position (raw ticks + wei amounts). |
 | `build_increase` | Add liquidity to an existing position. |
+| `build_wrap` | Wrap native ETH → WETH via the Universal Router (`WRAP_ETH`). |
+| `build_swap` | Exact-in WETH → token swap via the Universal Router; with `wrapWei` it wraps native ETH first and sweeps the WETH remainder in the same tx. |
 | `plan_position` | **Read-only.** Turn a human price range + human amounts into aligned ticks + wei amounts for `build_mint`. Reads token decimals over RPC. |
+| `get_pool_state` | **Read-only.** Live pool state (tick, sqrtPriceX96, human price, spacing); optional ±pct range suggestion (rounded inward) and live-ratio `amount0Desired`/`amount1Desired` from wallet balances. |
 
 `simulate` runs an opt-in `eth_call` dry-run: **on by default** for collect/close, **off** for
-mint/increase (those need approvals + balances, so the dry-run usually reverts). A reverted
-simulation comes back as an error — don't sign a tx that failed to simulate. See the companion
-skill for the full argument reference and position lifecycle.
+mint/increase (those need approvals + balances, so the dry-run usually reverts); wrap/swap
+simulate when you pass `sender` (the signing wallet). A reverted simulation comes back as an
+error — don't sign a tx that failed to simulate. See the companion skill for the full argument
+reference and position lifecycle.
 
 ## Install & run
 
@@ -37,7 +43,8 @@ npm test                    # vitest
 ```
 
 Set `MCP_HTTP_PORT` to serve the streamable-HTTP transport instead of stdio (endpoint:
-`http://<host>:<port>/mcp`):
+`http://<host>:<port>/mcp`). HTTP runs **stateless** — every POST gets a fresh server/transport
+pair, so any number of clients can connect and reconnect freely with no session bookkeeping:
 
 ```bash
 MCP_HTTP_PORT=8102 npm run dev
@@ -130,10 +137,10 @@ Public RPCs are rate-limited and best-effort — set your own for anything beyon
 One code path, transport kept separate so it stays testable and ready for a future v4 tool set:
 
 ```
-builder.ts     calldata encoding (viem) + position reads
-ticks.ts       pure price ↔ tick math (no I/O)
+builder.ts     calldata + unsigned-RLP encoding (viem), position/pool reads
+ticks.ts       pure tick / sqrt-price / liquidity math (no I/O)
 operations.ts  build + optional eth_call simulate + response shaping
-mcp.ts         the MCP transport (stdio / streamable HTTP)
+mcp.ts         the MCP transport (stdio / stateless streamable HTTP)
 ```
 
 ## CI / releases

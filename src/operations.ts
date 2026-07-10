@@ -11,13 +11,21 @@ import type { Address } from "viem";
 import {
   type PlanPositionParams,
   type PlanPositionResult,
+  type PoolStateParams,
+  type PoolStateResult,
+  type SwapParams,
   type UnsignedTx,
+  type WrapParams,
   buildCloseTx,
   buildCollectTx,
   buildIncreaseLiquidityTx,
   buildMintTx,
+  buildSwapTx,
+  buildWrapTx,
+  getPoolState,
   planPosition,
   simulateTx,
+  toUnsignedRlp,
 } from "./builder.js";
 
 /** Thrown when the opt-in `eth_call` dry-run reverts — never sign such a tx. */
@@ -30,6 +38,8 @@ export class SimulationError extends Error {
 
 export interface TxResult {
   tx: UnsignedTx;
+  /** Unsigned EIP-1559 serialization of `tx` (nonce/fees/gas zeroed). */
+  rlp: string;
   simulated: boolean;
   description: string;
 }
@@ -66,6 +76,7 @@ export async function collectOp(args: CollectArgs): Promise<TxResult> {
   );
   return {
     tx,
+    rlp: toUnsignedRlp(tx),
     simulated,
     description: `Collect fees from position #${args.positionId}`,
   };
@@ -111,6 +122,7 @@ export async function closeOp(args: CloseArgs): Promise<CloseResult> {
 
   return {
     tx,
+    rlp: toUnsignedRlp(tx),
     simulated,
     position: {
       token0: position.token0,
@@ -148,6 +160,7 @@ export async function mintOp(args: MintArgs): Promise<TxResult> {
   );
   return {
     tx,
+    rlp: toUnsignedRlp(tx),
     simulated,
     description: `Mint new position: ${args.token0}/${args.token1} fee=${args.fee} range=[${args.tickLower}, ${args.tickUpper}]`,
   };
@@ -173,6 +186,7 @@ export async function increaseOp(args: IncreaseArgs): Promise<TxResult> {
   );
   return {
     tx,
+    rlp: toUnsignedRlp(tx),
     simulated,
     description: `Increase liquidity of position #${args.positionId}`,
   };
@@ -182,4 +196,75 @@ export async function planOp(
   args: PlanPositionParams,
 ): Promise<PlanPositionResult> {
   return planPosition(args);
+}
+
+export async function poolStateOp(
+  args: PoolStateParams,
+): Promise<PoolStateResult> {
+  return getPoolState(args);
+}
+
+// Wrap/swap txs are payable and spend the sender's native ETH, so simulation
+// needs the actual signer as `from` — `sender` opts it in (unlike collect/
+// close, where `recipient` doubles as a plausible `from`).
+async function maybeSimulateAsSender(
+  chainId: number,
+  tx: UnsignedTx,
+  sender: Address | undefined,
+  simulate: boolean | undefined,
+): Promise<boolean> {
+  if (!sender) {
+    if (simulate === true) {
+      throw new Error("simulate: true requires `sender` (the wallet that will sign)");
+    }
+    return false;
+  }
+  return maybeSimulate(chainId, tx, sender, simulate !== false);
+}
+
+export interface WrapArgs extends WrapParams {
+  sender?: Address; // simulation `from`; must hold the ETH being wrapped
+  simulate?: boolean; // default: on when `sender` is provided
+}
+
+export async function wrapOp(args: WrapArgs): Promise<TxResult> {
+  const tx = buildWrapTx(args);
+  const simulated = await maybeSimulateAsSender(
+    args.chainId,
+    tx,
+    args.sender,
+    args.simulate,
+  );
+  return {
+    tx,
+    rlp: toUnsignedRlp(tx),
+    simulated,
+    description: `Wrap ${args.amountWei} wei native ETH to WETH via Universal Router`,
+  };
+}
+
+export interface SwapArgs extends SwapParams {
+  sender?: Address; // simulation `from`; must hold the ETH/WETH being swapped
+  simulate?: boolean; // default: on when `sender` is provided
+}
+
+export async function swapOp(args: SwapArgs): Promise<TxResult> {
+  const tx = buildSwapTx(args);
+  const simulated = await maybeSimulateAsSender(
+    args.chainId,
+    tx,
+    args.sender,
+    args.simulate,
+  );
+  const swap = `swap ${args.amountInWei} wei WETH → ${args.tokenOut} (fee ${args.fee})`;
+  const description =
+    args.wrapWei === undefined
+      ? `Universal Router: ${swap}`
+      : `Universal Router: wrap ${args.wrapWei} wei native ETH, ${swap}, sweep WETH remainder`;
+  return {
+    tx,
+    rlp: toUnsignedRlp(tx),
+    simulated,
+    description,
+  };
 }

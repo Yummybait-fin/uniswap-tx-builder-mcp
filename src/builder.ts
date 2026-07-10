@@ -2,24 +2,63 @@ import {
   type Address,
   type Hex,
   createPublicClient,
+  encodeAbiParameters,
   encodeFunctionData,
+  encodePacked,
   http,
   parseUnits,
+  serializeTransaction,
 } from "viem";
 
-import { erc20Abi, nfpmAbi } from "./abi.js";
+import {
+  erc20Abi,
+  factoryAbi,
+  nfpmAbi,
+  poolAbi,
+  universalRouterAbi,
+} from "./abi.js";
 import { getChain } from "./config.js";
-import { priceRangeToTicks } from "./ticks.js";
+import {
+  type MintAmounts,
+  type SuggestedRange,
+  computeMintAmounts,
+  priceRangeToTicks,
+  sqrtPriceX96ToPrice,
+  suggestRangeTicks,
+} from "./ticks.js";
 
 const MAX_UINT128 = (1n << 128n) - 1n;
 const DEADLINE_SECS = 1800; // 30 minutes
+const UR_DEADLINE_SECS = 1200; // 20 minutes — Universal Router wrap/swap
 const DEFAULT_SLIPPAGE_BPS = 50n; // 0.5%
 
 export interface UnsignedTx {
   to: Address;
   data: Hex;
-  value: string; // "0" — always non-payable for these calls
+  value: string; // wei; "0" except Universal Router wrap/swap (payable)
   chainId: number;
+}
+
+/**
+ * Unsigned EIP-1559 (type-2) serialization of a built tx:
+ * `0x02 || rlp([chainId, 0, 0, 0, 0, to, value, data, []])`. Nonce, both fee
+ * fields and gasLimit are zeroed by design — signing services (e.g. the CDP
+ * API) populate them at signing time. Callers that manage their own nonces
+ * should serialize `tx` themselves instead.
+ */
+export function toUnsignedRlp(tx: UnsignedTx): Hex {
+  return serializeTransaction({
+    type: "eip1559",
+    chainId: tx.chainId,
+    nonce: 0,
+    maxPriorityFeePerGas: 0n,
+    maxFeePerGas: 0n,
+    gas: 0n,
+    to: tx.to,
+    value: BigInt(tx.value),
+    data: tx.data,
+    accessList: [],
+  });
 }
 
 export interface PositionInfo {
@@ -333,4 +372,252 @@ export async function planPosition(
     amount0Desired: parseUnits(params.amount0 ?? "0", decimals0).toString(),
     amount1Desired: parseUnits(params.amount1 ?? "0", decimals1).toString(),
   };
+}
+
+// ─── pool state (live spot + range suggestion + live-ratio amounts) ──
+
+export interface PoolStateParams {
+  chainId: number;
+  token0: Address;
+  token1: Address;
+  fee: number;
+  rangePct?: number;
+  tickLower?: number;
+  tickUpper?: number;
+  balance0?: bigint;
+  balance1?: bigint;
+}
+
+export interface PoolStateResult {
+  pool: Address;
+  tick: number;
+  tickSpacing: number;
+  sqrtPriceX96: string;
+  price: number; // token1 per token0, human units
+  decimals0: number;
+  decimals1: number;
+  suggested?: SuggestedRange;
+  mintAmounts?: {
+    amount0Desired: string;
+    amount1Desired: string;
+    limitingSide: MintAmounts["limitingSide"];
+  };
+}
+
+/**
+ * Read a pool's LIVE state and derive the values a mint needs from it in the
+ * same breath: optional ±pct tick range (rounded inward to spacing) and
+ * optional `amount0Desired`/`amount1Desired` computed from the current
+ * sqrtPrice ratio — amounts computed from stale prices revert the mint with
+ * "Price slippage check".
+ */
+export async function getPoolState(
+  params: PoolStateParams,
+): Promise<PoolStateResult> {
+  if (BigInt(params.token0) >= BigInt(params.token1)) {
+    throw new Error(
+      "token0 must be < token1 (sort by address); swap the pair.",
+    );
+  }
+  const wantAmounts =
+    params.balance0 !== undefined || params.balance1 !== undefined;
+  if (
+    wantAmounts &&
+    (params.balance0 === undefined ||
+      params.balance1 === undefined ||
+      params.tickLower === undefined ||
+      params.tickUpper === undefined)
+  ) {
+    throw new Error(
+      "Mint amounts need all of balance0, balance1, tickLower, tickUpper " +
+        "(get a range from rangePct first).",
+    );
+  }
+
+  const cfg = getChain(params.chainId);
+  const client = createPublicClient({ transport: http(cfg.rpcUrl) });
+
+  const pool = await client.readContract({
+    address: cfg.factory,
+    abi: factoryAbi,
+    functionName: "getPool",
+    args: [params.token0, params.token1, params.fee],
+  });
+  if (BigInt(pool) === 0n) {
+    throw new Error(
+      `No pool for ${params.token0}/${params.token1} fee=${params.fee} on chain ${params.chainId}`,
+    );
+  }
+
+  const [slot0, tickSpacing, decimals0, decimals1] = await Promise.all([
+    client.readContract({ address: pool, abi: poolAbi, functionName: "slot0" }),
+    client.readContract({ address: pool, abi: poolAbi, functionName: "tickSpacing" }),
+    client.readContract({ address: params.token0, abi: erc20Abi, functionName: "decimals" }),
+    client.readContract({ address: params.token1, abi: erc20Abi, functionName: "decimals" }),
+  ]);
+  const [sqrtPriceX96, tick] = slot0;
+
+  const result: PoolStateResult = {
+    pool,
+    tick,
+    tickSpacing,
+    sqrtPriceX96: sqrtPriceX96.toString(),
+    price: sqrtPriceX96ToPrice(sqrtPriceX96, decimals0, decimals1),
+    decimals0,
+    decimals1,
+  };
+
+  if (params.rangePct !== undefined) {
+    result.suggested = suggestRangeTicks(tick, tickSpacing, params.rangePct);
+  }
+
+  if (wantAmounts) {
+    const amounts = computeMintAmounts(
+      sqrtPriceX96,
+      params.tickLower as number,
+      params.tickUpper as number,
+      params.balance0 as bigint,
+      params.balance1 as bigint,
+    );
+    result.mintAmounts = {
+      amount0Desired: amounts.amount0Desired.toString(),
+      amount1Desired: amounts.amount1Desired.toString(),
+      limitingSide: amounts.limitingSide,
+    };
+  }
+
+  return result;
+}
+
+// ─── Universal Router wrap / swap ────────────────────────────────────
+
+// UR command bytes (Commands.sol).
+const CMD_V3_SWAP_EXACT_IN = "00";
+const CMD_SWEEP = "04";
+const CMD_WRAP_ETH = "0b";
+
+// UR recipient placeholder the router resolves to msg.sender at execution —
+// safer than a literal address when the output goes back to the signer.
+const MSG_SENDER: Address = "0x0000000000000000000000000000000000000001";
+// Placeholder for the router itself (intermediate custody within one execute).
+const ADDRESS_THIS: Address = "0x0000000000000000000000000000000000000002";
+
+function urDeadline(deadline?: number): bigint {
+  return BigInt(deadline ?? Math.floor(Date.now() / 1000) + UR_DEADLINE_SECS);
+}
+
+function urExecute(
+  chainId: number,
+  commands: Hex,
+  inputs: Hex[],
+  value: bigint,
+  deadline?: number,
+): UnsignedTx {
+  const cfg = getChain(chainId);
+  const data = encodeFunctionData({
+    abi: universalRouterAbi,
+    functionName: "execute",
+    args: [commands, inputs, urDeadline(deadline)],
+  });
+  return { to: cfg.universalRouter, data, value: value.toString(), chainId };
+}
+
+export interface WrapParams {
+  chainId: number;
+  amountWei: bigint;
+  recipient?: Address; // default: the tx sender (MSG_SENDER placeholder)
+  deadline?: number; // unix seconds; default now + 20 min
+}
+
+/**
+ * Native ETH → wrapped native (WETH9) via Universal Router `WRAP_ETH` — a
+ * direct `WETH.deposit()` is unusable under NFPM/UR-scoped wallet policies.
+ * The tx is payable: `value` carries the ETH being wrapped.
+ */
+export function buildWrapTx(params: WrapParams): UnsignedTx {
+  const input = encodeAbiParameters(
+    [{ type: "address" }, { type: "uint256" }],
+    [params.recipient ?? MSG_SENDER, params.amountWei],
+  );
+  return urExecute(
+    params.chainId,
+    `0x${CMD_WRAP_ETH}`,
+    [input],
+    params.amountWei,
+    params.deadline,
+  );
+}
+
+export interface SwapParams {
+  chainId: number;
+  amountInWei: bigint;
+  tokenOut: Address;
+  fee: number; // pool fee tier for the WETH9→tokenOut hop
+  amountOutMin: bigint;
+  recipient?: Address; // default: the tx sender (MSG_SENDER placeholder)
+  /**
+   * Wrap this much native ETH first (≥ amountInWei); the un-swapped remainder
+   * is swept back to `recipient` as WETH. Omit when the wallet already holds
+   * WETH — that variant pays through Permit2, so the wallet needs a Permit2
+   * approval for WETH9 rather than a plain ERC-20 approval to the router.
+   */
+  wrapWei?: bigint;
+  deadline?: number; // unix seconds; default now + 20 min
+}
+
+/**
+ * Exact-in single-hop v3 swap WETH9 → `tokenOut` via Universal Router.
+ * With `wrapWei`: `WRAP_ETH(ADDRESS_THIS)` + `V3_SWAP_EXACT_IN(payerIsUser=
+ * false)` + `SWEEP(WETH9, recipient, remainder)` in one payable tx — the
+ * "wallet holds native ETH but the position needs WETH/ERC-20" path.
+ */
+export function buildSwapTx(params: SwapParams): UnsignedTx {
+  const cfg = getChain(params.chainId);
+  const recipient = params.recipient ?? MSG_SENDER;
+  const path = encodePacked(
+    ["address", "uint24", "address"],
+    [cfg.weth9, params.fee, params.tokenOut],
+  );
+  const swapInput = (payerIsUser: boolean) =>
+    encodeAbiParameters(
+      [
+        { type: "address" },
+        { type: "uint256" },
+        { type: "uint256" },
+        { type: "bytes" },
+        { type: "bool" },
+      ],
+      [recipient, params.amountInWei, params.amountOutMin, path, payerIsUser],
+    );
+
+  if (params.wrapWei === undefined) {
+    return urExecute(
+      params.chainId,
+      `0x${CMD_V3_SWAP_EXACT_IN}`,
+      [swapInput(true)],
+      0n,
+      params.deadline,
+    );
+  }
+
+  if (params.wrapWei < params.amountInWei) {
+    throw new Error(
+      `wrapWei (${params.wrapWei}) must cover amountInWei (${params.amountInWei})`,
+    );
+  }
+  const wrapInput = encodeAbiParameters(
+    [{ type: "address" }, { type: "uint256" }],
+    [ADDRESS_THIS, params.wrapWei],
+  );
+  const sweepInput = encodeAbiParameters(
+    [{ type: "address" }, { type: "address" }, { type: "uint256" }],
+    [cfg.weth9, recipient, params.wrapWei - params.amountInWei],
+  );
+  return urExecute(
+    params.chainId,
+    `0x${CMD_WRAP_ETH}${CMD_V3_SWAP_EXACT_IN}${CMD_SWEEP}`,
+    [wrapInput, swapInput(false), sweepInput],
+    params.wrapWei,
+    params.deadline,
+  );
 }

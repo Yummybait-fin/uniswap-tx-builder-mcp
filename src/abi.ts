@@ -151,3 +151,59 @@ export const erc20Abi = [
     outputs: [{ name: "", type: "uint8" }],
   },
 ] as const;
+
+/** Uniswap v3 factory — only `getPool`, to resolve a pool address. */
+export const factoryAbi = [
+  {
+    name: "getPool",
+    type: "function",
+    stateMutability: "view",
+    inputs: [
+      { name: "tokenA", type: "address" },
+      { name: "tokenB", type: "address" },
+      { name: "fee", type: "uint24" },
+    ],
+    outputs: [{ name: "pool", type: "address" }],
+  },
+] as const;
+
+/** Uniswap v3 pool — only the state reads `get_pool_state` needs. */
+export const poolAbi = [
+  {
+    name: "slot0",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [
+      { name: "sqrtPriceX96", type: "uint160" },
+      { name: "tick", type: "int24" },
+      { name: "observationIndex", type: "uint16" },
+      { name: "observationCardinality", type: "uint16" },
+      { name: "observationCardinalityNext", type: "uint16" },
+      { name: "feeProtocol", type: "uint8" },
+      { name: "unlocked", type: "bool" },
+    ],
+  },
+  {
+    name: "tickSpacing",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "int24" }],
+  },
+] as const;
+
+/** Universal Router — only `execute`, for wrap/swap calldata. */
+export const universalRouterAbi = [
+  {
+    name: "execute",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [
+      { name: "commands", type: "bytes" },
+      { name: "inputs", type: "bytes[]" },
+      { name: "deadline", type: "uint256" },
+    ],
+    outputs: [],
+  },
+] as const;
