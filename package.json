@@ -1,7 +1,8 @@
 {
-  "name": "@yummybait/uniswap-tx-builder",
+  "name": "@yummybait/uniswap-tx-builder-mcp",
   "version": "0.3.0",
-  "private": true,
+  "description": "Keyless MCP server that builds unsigned Uniswap v3 liquidity-position transactions (collect, close, mint, increase, wrap/swap via Universal Router) and simulates them — you sign with your own wallet.",
+  "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "uniswap-tx-builder-mcp": "dist/mcp.js",
@@ -13,13 +14,41 @@
     "skills",
     ".claude-plugin"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Yummybait-fin/uniswap-tx-builder-mcp.git"
+  },
+  "homepage": "https://github.com/Yummybait-fin/uniswap-tx-builder-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/Yummybait-fin/uniswap-tx-builder-mcp/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "uniswap",
+    "defi",
+    "liquidity",
+    "ethereum",
+    "base",
+    "unsigned-transactions"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
     "dev": "tsx watch src/mcp.ts",
     "build": "tsc",
     "start": "node dist/mcp.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "verify:pack": "npm run build && node scripts/verify-tarball.mjs",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run typecheck && npm test && npm run verify:pack"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
