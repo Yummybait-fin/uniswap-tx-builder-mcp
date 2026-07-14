@@ -23,16 +23,21 @@ CDP API populate them; serialize `tx` yourself if you manage nonces) — and a h
 `value` is `"0"` except the payable Universal Router wrap/swap builds. Addresses are `0x…40`;
 `positionId` and amounts are decimal **strings** (they exceed JS safe integers).
 
-| Tool | Purpose |
-|------|---------|
-| `build_collect` | Collect all uncollected fees from a position to `recipient`. |
-| `build_close` | Remove all liquidity **+** collect; `burn: true` also burns the empty NFT. Returns the read position. |
-| `build_mint` | Mint a new position (raw ticks + wei amounts). |
-| `build_increase` | Add liquidity to an existing position. |
-| `build_wrap` | Wrap native ETH → WETH via the Universal Router (`WRAP_ETH`). |
-| `build_swap` | Exact-in WETH → token swap via the Universal Router; with `wrapWei` it wraps native ETH first and sweeps the WETH remainder in the same tx. |
-| `plan_position` | **Read-only.** Turn a human price range + human amounts into aligned ticks + wei amounts for `build_mint`. Reads token decimals over RPC. |
-| `get_pool_state` | **Read-only.** Live pool state (tick, sqrtPriceX96, human price, spacing); optional ±pct range suggestion (rounded inward) and live-ratio `amount0Desired`/`amount1Desired` from wallet balances. |
+| Tool | Purpose | Needs RPC? |
+|------|---------|------------|
+| `build_collect` | Collect all uncollected fees from a position to `recipient`. | Only for the dry-run (on by default; `simulate: false` builds offline) |
+| `build_close` | Remove all liquidity **+** collect; `burn: true` also burns the empty NFT. Returns the read position. | **Always** — reads the position first |
+| `build_mint` | Mint a new position (raw ticks + wei amounts). | Only with `simulate: true` |
+| `build_increase` | Add liquidity to an existing position. | Only with `simulate: true` |
+| `build_wrap` | Wrap native ETH → WETH via the Universal Router (`WRAP_ETH`). | Only with `sender` (enables the dry-run) |
+| `build_swap` | Exact-in WETH → token swap via the Universal Router; with `wrapWei` it wraps native ETH first and sweeps the WETH remainder in the same tx. | Only with `sender` (enables the dry-run) |
+| `plan_position` | **Read-only.** Turn a human price range + human amounts into aligned ticks + wei amounts for `build_mint`. Reads token decimals over RPC. | **Always** |
+| `get_pool_state` | **Read-only.** Live pool state (tick, sqrtPriceX96, human price, spacing); optional ±pct range suggestion (rounded inward) and live-ratio `amount0Desired`/`amount1Desired` from wallet balances. | **Always** |
+
+Encoding itself is **offline**: `build_mint`, `build_increase`, `build_wrap`, `build_swap`, and
+`build_collect` (with `simulate: false`) produce calldata without any network access. Only chain
+*reads* need a reachable RPC endpoint — and public defaults are baked in per chain, so nothing has
+to be configured either way (see [Configuration](#configuration) to override them).
 
 `simulate` runs an opt-in `eth_call` dry-run: **on by default** for collect/close, **off** for
 mint/increase (those need approvals + balances, so the dry-run usually reverts); wrap/swap
@@ -156,7 +161,8 @@ One code path, transport kept separate so it stays testable and ready for a futu
 builder.ts     calldata + unsigned-RLP encoding (viem), position/pool reads
 ticks.ts       pure tick / sqrt-price / liquidity math (no I/O)
 operations.ts  build + optional eth_call simulate + response shaping
-mcp.ts         the MCP transport (stdio / stateless streamable HTTP)
+server.ts      the MCP tool surface (schemas, registration, logging)
+mcp.ts         transport bootstrap (stdio / stateless streamable HTTP)
 ```
 
 ## CI / releases

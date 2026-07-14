@@ -8,7 +8,7 @@
 # Holds no keys and never signs. Reads public RPCs by default; override per
 # chain via RPC_* env vars (see src/config.ts).
 
-FROM node:26-slim AS builder
+FROM node:26-slim@sha256:715e55e4b84e4bb0ff48e49b398a848f08e55daed8eb6a0ea1839ae53bc57583 AS builder
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
@@ -16,7 +16,7 @@ COPY tsconfig.json ./
 COPY src/ ./src/
 RUN npx tsc
 
-FROM node:26-slim
+FROM node:26-slim@sha256:715e55e4b84e4bb0ff48e49b398a848f08e55daed8eb6a0ea1839ae53bc57583
 WORKDIR /app
 ENV NODE_ENV=production
 COPY package.json package-lock.json ./
