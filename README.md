@@ -1,5 +1,11 @@
 # uniswap-tx-builder-mcp
 
+[![CI](https://github.com/Yummybait-fin/uniswap-tx-builder-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Yummybait-fin/uniswap-tx-builder-mcp/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/%40yummybait%2Funiswap-tx-builder-mcp)](https://www.npmjs.com/package/@yummybait/uniswap-tx-builder-mcp)
+[![node](https://img.shields.io/node/v/%40yummybait%2Funiswap-tx-builder-mcp)](https://www.npmjs.com/package/@yummybait/uniswap-tx-builder-mcp)
+[![license](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Yummybait-fin/uniswap-tx-builder-mcp/badge)](https://scorecard.dev/viewer/?uri=github.com/Yummybait-fin/uniswap-tx-builder-mcp)
+
 A **keyless** [MCP](https://modelcontextprotocol.io) server that builds *unsigned* Uniswap v3
 liquidity-position transactions and optionally simulates them via `eth_call`. **It never holds
 keys and never signs** — you take the returned calldata and sign + broadcast it with your own
