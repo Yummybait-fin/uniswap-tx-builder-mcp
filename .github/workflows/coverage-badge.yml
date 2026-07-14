@@ -1,0 +1,46 @@
+# Publishes a shields.io endpoint JSON (coverage % of main) to the orphan
+# `badges` branch — GitHub's code-quality coverage has no public badge, so the
+# README badge reads this file via img.shields.io/endpoint instead.
+name: Coverage badge
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coverage-badge
+  cancel-in-progress: true
+
+jobs:
+  badge:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # force-pushes the single-commit badges branch
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run test:coverage
+
+      - name: Publish badge JSON to the badges branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pct=$(node -p "Math.round(require('./coverage/coverage-summary.json').total.lines.pct * 10) / 10")
+          color=$(node -p "const p=$pct; p>=90?'brightgreen':p>=80?'green':p>=70?'yellowgreen':p>=60?'yellow':'red'")
+          dir=$(mktemp -d)
+          printf '{"schemaVersion":1,"label":"coverage","message":"%s%%","color":"%s"}\n' "$pct" "$color" > "$dir/coverage.json"
+          git -C "$dir" init -q -b badges
+          git -C "$dir" config user.name "github-actions[bot]"
+          git -C "$dir" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$dir" add coverage.json
+          git -C "$dir" commit -qm "coverage badge: ${pct}%"
+          git -C "$dir" push -qf "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" badges

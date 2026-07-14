@@ -79,4 +79,12 @@ describe("priceRangeToTicks", () => {
     const r = priceRangeToTicks(2000, 2000, 3000, 18, 18);
     expect(r.tickUpper - r.tickLower).toBe(60);
   });
+
+  it("widens downward when the range collapses at MAX_TICK", () => {
+    // Both prices clamp to the top aligned tick — the only way to widen is down.
+    const r = priceRangeToTicks(1e40, 1e40, 3000, 18, 18);
+    const maxAligned = Math.floor(MAX_TICK / 60) * 60;
+    expect(r.tickUpper).toBe(maxAligned);
+    expect(r.tickLower).toBe(maxAligned - 60);
+  });
 });

@@ -1,6 +1,7 @@
 # uniswap-tx-builder-mcp
 
 [![CI](https://github.com/Yummybait-fin/uniswap-tx-builder-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Yummybait-fin/uniswap-tx-builder-mcp/actions/workflows/ci.yml)
+[![coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FYummybait-fin%2Funiswap-tx-builder-mcp%2Fbadges%2Fcoverage.json)](https://github.com/Yummybait-fin/uniswap-tx-builder-mcp/actions/workflows/coverage-badge.yml)
 [![npm version](https://img.shields.io/npm/v/%40yummybait%2Funiswap-tx-builder-mcp)](https://www.npmjs.com/package/@yummybait/uniswap-tx-builder-mcp)
 [![node](https://img.shields.io/node/v/%40yummybait%2Funiswap-tx-builder-mcp)](https://www.npmjs.com/package/@yummybait/uniswap-tx-builder-mcp)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
