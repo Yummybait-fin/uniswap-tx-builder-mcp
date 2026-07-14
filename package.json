@@ -45,6 +45,7 @@
     "start": "node dist/mcp.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "verify:pack": "npm run build && node scripts/verify-tarball.mjs",
     "prepack": "npm run build",
@@ -57,6 +58,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
+    "@vitest/coverage-v8": "^4.1.10",
     "tsx": "^4.19.4",
     "typescript": "^7.0.2",
     "vitest": "^4.1.0"

@@ -24,9 +24,11 @@ import {
   buildCollectTx,
   buildIncreaseLiquidityTx,
   buildMintTx,
+  getPoolState,
   planPosition,
   simulateTx,
 } from "../src/builder.js";
+import { computeMintAmounts } from "../src/ticks.js";
 
 // ── constants ────────────────────────────────────────────────────────
 
@@ -364,5 +366,102 @@ describe("simulateTx", () => {
     await expect(simulateTx(1, tx, RECIPIENT)).rejects.toThrow(
       "Not approved",
     );
+  });
+});
+
+// ── getPoolState ─────────────────────────────────────────────────────
+
+describe("getPoolState", () => {
+  beforeEach(() => {
+    mockReadContract.mockClear();
+  });
+
+  const POOL = "0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8" as const;
+  const Q96 = 1n << 96n;
+  // sqrtPriceX96 = Q96 → raw ratio 1 → tick 0.
+  const SLOT0 = [Q96, 0, 0, 0, 0, 0, true];
+
+  /** Queue the four RPC reads getPoolState performs, in call order. */
+  function mockPoolReads() {
+    mockReadContract
+      .mockResolvedValueOnce(POOL) // factory.getPool
+      .mockResolvedValueOnce(SLOT0) // pool.slot0
+      .mockResolvedValueOnce(60) // pool.tickSpacing
+      .mockResolvedValueOnce(6) // token0.decimals (USDC-like)
+      .mockResolvedValueOnce(18); // token1.decimals (WETH-like)
+  }
+
+  const BASE_PARAMS = {
+    chainId: 1,
+    token0: TOKEN0,
+    token1: TOKEN1,
+    fee: 3000,
+  };
+
+  it("returns live pool state", async () => {
+    mockPoolReads();
+    const state = await getPoolState(BASE_PARAMS);
+
+    expect(state.pool).toBe(POOL);
+    expect(state.tick).toBe(0);
+    expect(state.tickSpacing).toBe(60);
+    expect(state.sqrtPriceX96).toBe(Q96.toString());
+    // ratio 1 in raw units → 10^(6-18) in human units
+    expect(state.price).toBeCloseTo(1e-12, 15);
+    expect(state.decimals0).toBe(6);
+    expect(state.decimals1).toBe(18);
+    expect(state.suggested).toBeUndefined();
+    expect(state.mintAmounts).toBeUndefined();
+  });
+
+  it("rejects unsorted token pair without touching RPC", async () => {
+    await expect(
+      getPoolState({ ...BASE_PARAMS, token0: TOKEN1, token1: TOKEN0 }),
+    ).rejects.toThrow("token0 must be < token1");
+    expect(mockReadContract).not.toHaveBeenCalled();
+  });
+
+  it("rejects a partial mint-amounts request without touching RPC", async () => {
+    await expect(
+      getPoolState({ ...BASE_PARAMS, balance0: 1n }),
+    ).rejects.toThrow("Mint amounts need all of");
+    expect(mockReadContract).not.toHaveBeenCalled();
+  });
+
+  it("throws when the pool does not exist", async () => {
+    mockReadContract.mockResolvedValueOnce(
+      "0x0000000000000000000000000000000000000000",
+    );
+    await expect(getPoolState(BASE_PARAMS)).rejects.toThrow("No pool for");
+  });
+
+  it("suggests an aligned range for rangePct", async () => {
+    mockPoolReads();
+    const state = await getPoolState({ ...BASE_PARAMS, rangePct: 5 });
+
+    // ±5% around tick 0 is ±487.9 ticks, rounded inward to spacing 60.
+    expect(state.suggested).toEqual(
+      expect.objectContaining({ tickLower: -480, tickUpper: 480 }),
+    );
+  });
+
+  it("computes live-ratio mint amounts from balances", async () => {
+    mockPoolReads();
+    const balance0 = 1_000_000_000n; // 1000 USDC
+    const balance1 = 10n ** 18n; // 1 WETH
+    const state = await getPoolState({
+      ...BASE_PARAMS,
+      tickLower: -60,
+      tickUpper: 60,
+      balance0,
+      balance1,
+    });
+
+    const expected = computeMintAmounts(Q96, -60, 60, balance0, balance1);
+    expect(state.mintAmounts).toEqual({
+      amount0Desired: expected.amount0Desired.toString(),
+      amount1Desired: expected.amount1Desired.toString(),
+      limitingSide: expected.limitingSide,
+    });
   });
 });
