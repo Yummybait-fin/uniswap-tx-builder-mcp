@@ -15,6 +15,14 @@ wallet (viem, a CDP wallet MCP, any signer).
 Because it's keyless, the only limits that apply to a built tx are *your wallet's* — the server's
 threat surface is just "it returns calldata and reads public RPCs."
 
+## Ecosystem
+
+Part of [Yummybait](https://www.yummybait.finance/):
+
+- [`cdp-wallet-agent-example`](https://github.com/Yummybait-fin/cdp-wallet-agent-example) — a
+  reference agent that drives this MCP with a Coinbase CDP wallet as the signer.
+- [yummybait.finance](https://www.yummybait.finance/) — the product these tools power.
+
 ## Tools
 
 Every build tool returns `tx = { to, data, value, chainId }` plus `rlp` — the **unsigned
