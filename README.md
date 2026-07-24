@@ -37,10 +37,12 @@ CDP API populate them; serialize `tx` yourself if you manage nonces) — and a h
 | `build_close` | Remove all liquidity **+** collect; `burn: true` also burns the empty NFT. Returns the read position. | **Always** — reads the position first |
 | `build_mint` | Mint a new position (raw ticks + wei amounts). | Only with `simulate: true` |
 | `build_increase` | Add liquidity to an existing position. | Only with `simulate: true` |
+| `build_approve` | Build an ERC-20 `approve(spender, amount)` tx — e.g. the NFPM before `build_mint`/`build_increase`, or Permit2 before a Permit2-paid `build_swap`. `amount: "max"` for an unlimited allowance. | Only with `sender` (enables the dry-run) |
 | `build_wrap` | Wrap native ETH → WETH via the Universal Router (`WRAP_ETH`). | Only with `sender` (enables the dry-run) |
 | `build_swap` | Exact-in WETH → token swap via the Universal Router; with `wrapWei` it wraps native ETH first and sweeps the WETH remainder in the same tx. | Only with `sender` (enables the dry-run) |
 | `plan_position` | **Read-only.** Turn a human price range + human amounts into aligned ticks + wei amounts for `build_mint`. Reads token decimals over RPC. | **Always** |
 | `get_pool_state` | **Read-only.** Live pool state (tick, sqrtPriceX96, human price, spacing); optional ±pct range suggestion (rounded inward) and live-ratio `amount0Desired`/`amount1Desired` from wallet balances. | **Always** |
+| `get_positions` | **Read-only.** List every position NFT a wallet holds (token0/1, fee, tick range, liquidity, tokens owed) via the NFPM's ERC-721 enumeration. | **Always** |
 
 Encoding itself is **offline**: `build_mint`, `build_increase`, `build_wrap`, `build_swap`, and
 `build_collect` (with `simulate: false`) produce calldata without any network access. Only chain
@@ -48,7 +50,7 @@ Encoding itself is **offline**: `build_mint`, `build_increase`, `build_wrap`, `b
 to be configured either way (see [Configuration](#configuration) to override them).
 
 `simulate` runs an opt-in `eth_call` dry-run: **on by default** for collect/close, **off** for
-mint/increase (those need approvals + balances, so the dry-run usually reverts); wrap/swap
+mint/increase (those need approvals + balances, so the dry-run usually reverts); wrap/swap/approve
 simulate when you pass `sender` (the signing wallet). A reverted simulation comes back as an
 error — don't sign a tx that failed to simulate. See the companion skill for the full argument
 reference and position lifecycle.

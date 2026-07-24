@@ -6,16 +6,18 @@
 import { createRequire } from "node:module";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { Address } from "viem";
+import { type Address, maxUint256 } from "viem";
 import { z } from "zod";
 
 import {
+  approveOp,
   closeOp,
   collectOp,
   increaseOp,
   mintOp,
   planOp,
   poolStateOp,
+  positionsOp,
   swapOp,
   wrapOp,
 } from "./operations.js";
@@ -217,6 +219,38 @@ export function buildServer(): McpServer {
   );
 
   server.registerTool(
+    "build_approve",
+    {
+      title: "Build an ERC-20 approve transaction",
+      description:
+        "Build an UNSIGNED tx that approves `spender` to move up to `amount` of `token` on " +
+        "behalf of the wallet that signs it — e.g. the NonfungiblePositionManager before " +
+        "build_mint/build_increase, or Permit2 before a Permit2-paid build_swap. Pass " +
+        "amount=\"max\" for an unlimited (uint256 max) allowance. Returns the tx plus " +
+        "unsigned rlp. Pass `sender` (the signing wallet) to eth_call-simulate before signing.",
+      inputSchema: {
+        chainId: z.number().int(),
+        token: addressSchema,
+        spender: addressSchema,
+        amount: z.union([uintStringSchema, z.literal("max")]),
+        sender: addressSchema.optional(),
+        simulate: z.boolean().optional(),
+      },
+    },
+    async (args) =>
+      run("build_approve", args, () =>
+        approveOp({
+          chainId: args.chainId,
+          token: args.token as Address,
+          spender: args.spender as Address,
+          amount: args.amount === "max" ? maxUint256 : BigInt(args.amount),
+          sender: args.sender as Address | undefined,
+          simulate: args.simulate,
+        }),
+      ),
+  );
+
+  server.registerTool(
     "plan_position",
     {
       title: "Plan a position from a human price range",
@@ -289,6 +323,29 @@ export function buildServer(): McpServer {
           tickUpper: args.tickUpper,
           balance0: args.balance0 === undefined ? undefined : BigInt(args.balance0),
           balance1: args.balance1 === undefined ? undefined : BigInt(args.balance1),
+        }),
+      ),
+  );
+
+  server.registerTool(
+    "get_positions",
+    {
+      title: "List a wallet's Uniswap v3 positions",
+      description:
+        "READ-ONLY (builds no tx). Lists every Uniswap v3 position NFT `owner` holds on " +
+        "`chainId` via the NonfungiblePositionManager, with each position's full state " +
+        "(token0/token1, fee, tickLower/tickUpper, liquidity, tokensOwed0/1) — feed a " +
+        "positionId straight into build_collect/build_close/build_increase.",
+      inputSchema: {
+        chainId: z.number().int(),
+        owner: addressSchema,
+      },
+    },
+    async (args) =>
+      run("get_positions", args, () =>
+        positionsOp({
+          chainId: args.chainId,
+          owner: args.owner as Address,
         }),
       ),
   );

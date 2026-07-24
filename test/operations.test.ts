@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // ── mock the builder layer: operations' own logic is what's under test ──
 
 vi.mock("../src/builder.js", () => ({
+  buildApproveTx: vi.fn(),
   buildCloseTx: vi.fn(),
   buildCollectTx: vi.fn(),
   buildIncreaseLiquidityTx: vi.fn(),
@@ -10,12 +11,14 @@ vi.mock("../src/builder.js", () => ({
   buildSwapTx: vi.fn(),
   buildWrapTx: vi.fn(),
   getPoolState: vi.fn(),
+  getPositionsByOwner: vi.fn(),
   planPosition: vi.fn(),
   simulateTx: vi.fn(),
   toUnsignedRlp: vi.fn(() => "0xr1p"),
 }));
 
 import {
+  buildApproveTx,
   buildCloseTx,
   buildCollectTx,
   buildIncreaseLiquidityTx,
@@ -23,17 +26,20 @@ import {
   buildSwapTx,
   buildWrapTx,
   getPoolState,
+  getPositionsByOwner,
   planPosition,
   simulateTx,
 } from "../src/builder.js";
 import {
   SimulationError,
+  approveOp,
   closeOp,
   collectOp,
   increaseOp,
   mintOp,
   planOp,
   poolStateOp,
+  positionsOp,
   swapOp,
   wrapOp,
 } from "../src/operations.js";
@@ -50,6 +56,7 @@ beforeEach(() => {
   vi.mocked(buildIncreaseLiquidityTx).mockReturnValue(TX);
   vi.mocked(buildWrapTx).mockReturnValue(TX);
   vi.mocked(buildSwapTx).mockReturnValue(TX);
+  vi.mocked(buildApproveTx).mockReturnValue(TX);
 });
 
 // ── collectOp ────────────────────────────────────────────────────────
@@ -206,6 +213,66 @@ describe("planOp / poolStateOp", () => {
     expect(planPosition).toHaveBeenCalledWith(planArgs);
     await expect(poolStateOp(stateArgs)).resolves.toBe(state);
     expect(getPoolState).toHaveBeenCalledWith(stateArgs);
+  });
+});
+
+// ── positionsOp (read-only passthrough) ──────────────────────────────
+
+describe("positionsOp", () => {
+  it("wraps the builder's positions list with the queried owner", async () => {
+    const positions = [
+      {
+        positionId: "10",
+        token0: TOKEN0,
+        token1: TOKEN1,
+        fee: 3000,
+        tickLower: -60,
+        tickUpper: 60,
+        liquidity: "1000",
+        tokensOwed0: "1",
+        tokensOwed1: "2",
+      },
+    ];
+    vi.mocked(getPositionsByOwner).mockResolvedValue(positions);
+
+    const res = await positionsOp({ chainId: 1, owner: RECIPIENT });
+
+    expect(getPositionsByOwner).toHaveBeenCalledWith(1, RECIPIENT);
+    expect(res).toEqual({ owner: RECIPIENT, positions });
+  });
+});
+
+// ── approveOp (simulation needs the actual sender) ───────────────────
+
+describe("approveOp", () => {
+  const ARGS = {
+    chainId: 1,
+    token: TOKEN0,
+    spender: TOKEN1,
+    amount: 1_000_000n,
+  };
+
+  it("skips simulation without a sender", async () => {
+    const res = await approveOp(ARGS);
+    expect(simulateTx).not.toHaveBeenCalled();
+    expect(res.simulated).toBe(false);
+    expect(res.description).toBe(
+      `Approve ${TOKEN1} to spend 1000000 wei of ${TOKEN0}`,
+    );
+  });
+
+  it("simulates as the sender by default when one is given", async () => {
+    const res = await approveOp({ ...ARGS, sender: RECIPIENT });
+    expect(simulateTx).toHaveBeenCalledWith(1, TX, RECIPIENT);
+    expect(res.simulated).toBe(true);
+  });
+
+  it("describes a max allowance as unlimited", async () => {
+    const maxUint256 = (1n << 256n) - 1n;
+    const res = await approveOp({ ...ARGS, amount: maxUint256 });
+    expect(res.description).toBe(
+      `Approve ${TOKEN1} to spend unlimited of ${TOKEN0}`,
+    );
   });
 });
 

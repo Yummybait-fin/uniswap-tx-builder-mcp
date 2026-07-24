@@ -14,18 +14,22 @@ vi.mock("../src/operations.js", async (importOriginal) => {
     increaseOp: vi.fn(),
     planOp: vi.fn(),
     poolStateOp: vi.fn(),
+    positionsOp: vi.fn(),
     wrapOp: vi.fn(),
     swapOp: vi.fn(),
+    approveOp: vi.fn(),
   };
 });
 
 import {
+  approveOp,
   closeOp,
   collectOp,
   increaseOp,
   mintOp,
   planOp,
   poolStateOp,
+  positionsOp,
   swapOp,
   wrapOp,
 } from "../src/operations.js";
@@ -40,8 +44,10 @@ const TOOL_NAMES = [
   "build_close",
   "build_mint",
   "build_increase",
+  "build_approve",
   "plan_position",
   "get_pool_state",
+  "get_positions",
   "build_wrap",
   "build_swap",
 ];
@@ -62,7 +68,7 @@ beforeEach(() => {
 });
 
 describe("buildServer", () => {
-  it("exposes all eight tools", async () => {
+  it("exposes all ten tools", async () => {
     const client = await connect();
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([...TOOL_NAMES].sort());
@@ -216,6 +222,30 @@ describe("buildServer", () => {
       },
     },
     {
+      tool: "get_positions",
+      op: positionsOp,
+      args: { chainId: 1, owner: RECIPIENT },
+      expected: { chainId: 1, owner: RECIPIENT },
+    },
+    {
+      tool: "build_approve",
+      op: approveOp,
+      args: {
+        chainId: 1,
+        token: TOKEN0,
+        spender: TOKEN1,
+        amount: "1000",
+      },
+      expected: {
+        chainId: 1,
+        token: TOKEN0,
+        spender: TOKEN1,
+        amount: 1000n,
+        sender: undefined,
+        simulate: undefined,
+      },
+    },
+    {
       tool: "build_wrap",
       op: wrapOp,
       args: { chainId: 1, amountWei: "1000" },
@@ -264,6 +294,27 @@ describe("buildServer", () => {
     expect(res.isError).toBeFalsy();
     const [content] = res.content as Array<{ type: string; text: string }>;
     expect(JSON.parse(content.text)).toEqual(payload);
+  });
+
+  it('coerces build_approve amount="max" to uint256 max', async () => {
+    const payload = { description: "build_approve result" };
+    vi.mocked(approveOp).mockResolvedValueOnce(payload as never);
+
+    const client = await connect();
+    const res = await client.callTool({
+      name: "build_approve",
+      arguments: { chainId: 1, token: TOKEN0, spender: TOKEN1, amount: "max" },
+    });
+
+    expect(approveOp).toHaveBeenCalledWith({
+      chainId: 1,
+      token: TOKEN0,
+      spender: TOKEN1,
+      amount: 2n ** 256n - 1n,
+      sender: undefined,
+      simulate: undefined,
+    });
+    expect(res.isError).toBeFalsy();
   });
 
   it("collapses long calldata in logs but not in the returned payload", async () => {

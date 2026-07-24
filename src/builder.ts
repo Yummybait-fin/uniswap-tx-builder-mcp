@@ -107,6 +107,96 @@ async function readPosition(
   };
 }
 
+// ─── positions by owner (ERC-721 enumeration) ───────────────────────
+
+export interface OwnedPosition {
+  positionId: string;
+  token0: Address;
+  token1: Address;
+  fee: number;
+  tickLower: number;
+  tickUpper: number;
+  liquidity: string;
+  tokensOwed0: string;
+  tokensOwed1: string;
+}
+
+/**
+ * List every Uniswap v3 position NFT `owner` holds on `chainId`, via the
+ * NFPM's ERC-721 enumeration (`balanceOf` + `tokenOfOwnerByIndex`), with each
+ * position's full on-chain state (`positions`).
+ */
+export async function getPositionsByOwner(
+  chainId: number,
+  owner: Address,
+): Promise<OwnedPosition[]> {
+  const cfg = getChain(chainId);
+  const client = createPublicClient({ transport: http(cfg.rpcUrl) });
+
+  const balance = await client.readContract({
+    address: cfg.nfpm,
+    abi: nfpmAbi,
+    functionName: "balanceOf",
+    args: [owner],
+  });
+
+  const tokenIds = await Promise.all(
+    Array.from({ length: Number(balance) }, (_, index) =>
+      client.readContract({
+        address: cfg.nfpm,
+        abi: nfpmAbi,
+        functionName: "tokenOfOwnerByIndex",
+        args: [owner, BigInt(index)],
+      }),
+    ),
+  );
+
+  const positions = await Promise.all(
+    tokenIds.map((tokenId) =>
+      client.readContract({
+        address: cfg.nfpm,
+        abi: nfpmAbi,
+        functionName: "positions",
+        args: [tokenId],
+      }),
+    ),
+  );
+
+  return tokenIds.map((tokenId, i) => {
+    const p = positions[i];
+    return {
+      positionId: tokenId.toString(),
+      token0: p[2],
+      token1: p[3],
+      fee: p[4],
+      tickLower: p[5],
+      tickUpper: p[6],
+      liquidity: p[7].toString(),
+      tokensOwed0: p[10].toString(),
+      tokensOwed1: p[11].toString(),
+    };
+  });
+}
+
+// ─── ERC-20 approve ──────────────────────────────────────────────────
+
+export interface ApproveParams {
+  chainId: number;
+  token: Address;
+  spender: Address;
+  amount: bigint;
+}
+
+/** Encode an ERC-20 `approve(spender, amount)` call against `token`. */
+export function buildApproveTx(params: ApproveParams): UnsignedTx {
+  const data = encodeFunctionData({
+    abi: erc20Abi,
+    functionName: "approve",
+    args: [params.spender, params.amount],
+  });
+  return { to: params.token, data, value: "0", chainId: params.chainId };
+}
+
 // ─── collect ────────────────────────────────────────────────────────
 
 export async function buildCollectTx(

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { decodeFunctionData } from "viem";
 
-import { nfpmAbi } from "../src/abi.js";
+import { erc20Abi, nfpmAbi } from "../src/abi.js";
 
 // ── mock viem's createPublicClient (used by readPosition) ────────────
 
@@ -20,11 +20,13 @@ vi.mock("viem", async (importOriginal) => {
 });
 
 import {
+  buildApproveTx,
   buildCloseTx,
   buildCollectTx,
   buildIncreaseLiquidityTx,
   buildMintTx,
   getPoolState,
+  getPositionsByOwner,
   planPosition,
   simulateTx,
 } from "../src/builder.js";
@@ -289,6 +291,98 @@ describe("buildIncreaseLiquidityTx", () => {
     });
     const p = decodeFunctionData({ abi: nfpmAbi, data: tx.data }).args[0];
     expect(p.amount0Min).toBe(9_950n);
+  });
+});
+
+// ── buildApproveTx ─────────────────────────────────────────────────
+
+describe("buildApproveTx", () => {
+  it("encodes an ERC-20 approve call against the token address", () => {
+    const tx = buildApproveTx({
+      chainId: 1,
+      token: TOKEN0,
+      spender: TOKEN1,
+      amount: 1_000_000n,
+    });
+
+    expect(tx.to).toBe(TOKEN0);
+    expect(tx.chainId).toBe(1);
+    expect(tx.value).toBe("0");
+
+    const decoded = decodeFunctionData({ abi: erc20Abi, data: tx.data });
+    expect(decoded.functionName).toBe("approve");
+    expect(decoded.args[0].toLowerCase()).toBe(TOKEN1.toLowerCase());
+    expect(decoded.args[1]).toBe(1_000_000n);
+  });
+
+  it("encodes a max (unlimited) allowance", () => {
+    const maxUint256 = (1n << 256n) - 1n;
+    const tx = buildApproveTx({
+      chainId: 1,
+      token: TOKEN0,
+      spender: TOKEN1,
+      amount: maxUint256,
+    });
+    const decoded = decodeFunctionData({ abi: erc20Abi, data: tx.data });
+    expect(decoded.args[1]).toBe(maxUint256);
+  });
+});
+
+// ── getPositionsByOwner ────────────────────────────────────────────
+
+describe("getPositionsByOwner", () => {
+  beforeEach(() => {
+    mockReadContract.mockClear();
+  });
+
+  const positionTuple = (tokenId: bigint) =>
+    [
+      0n,
+      "0x0000000000000000000000000000000000000000",
+      TOKEN0,
+      TOKEN1,
+      3000,
+      -887220,
+      887220,
+      1_000_000_000_000_000_000n + tokenId,
+      0n,
+      0n,
+      5n,
+      6n,
+    ] as const;
+
+  it("returns no positions for a wallet holding none", async () => {
+    mockReadContract.mockResolvedValueOnce(0n); // balanceOf
+
+    const positions = await getPositionsByOwner(1, RECIPIENT);
+
+    expect(positions).toEqual([]);
+    expect(mockReadContract).toHaveBeenCalledTimes(1);
+  });
+
+  it("enumerates every owned tokenId and reads its full position state", async () => {
+    mockReadContract
+      .mockResolvedValueOnce(2n) // balanceOf
+      .mockResolvedValueOnce(10n) // tokenOfOwnerByIndex(0)
+      .mockResolvedValueOnce(11n) // tokenOfOwnerByIndex(1)
+      .mockResolvedValueOnce(positionTuple(10n)) // positions(10)
+      .mockResolvedValueOnce(positionTuple(11n)); // positions(11)
+
+    const positions = await getPositionsByOwner(1, RECIPIENT);
+
+    expect(positions).toHaveLength(2);
+    expect(positions[0]).toEqual({
+      positionId: "10",
+      token0: TOKEN0,
+      token1: TOKEN1,
+      fee: 3000,
+      tickLower: -887220,
+      tickUpper: 887220,
+      liquidity: (1_000_000_000_000_000_000n + 10n).toString(),
+      tokensOwed0: "5",
+      tokensOwed1: "6",
+    });
+    expect(positions[1].positionId).toBe("11");
   });
 });
 
