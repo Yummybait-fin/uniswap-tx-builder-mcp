@@ -119,7 +119,7 @@ jobs:
   # Runs after npm/docker so the registry's ownership checks — mcpName in the
   # published package.json, the io.modelcontextprotocol.server.name image
   # label — have something live to verify against. Auth is GitHub OIDC: the
-  # repo's org (Yummybait-fin) owns the io.github.yummybait-fin/* namespace,
+  # repo's org (Yummybait-fin) owns the io.github.Yummybait-fin/* namespace,
   # so there's no secret to provision, even for the first-ever publish.
   mcp-registry:
     needs: [npm, docker]

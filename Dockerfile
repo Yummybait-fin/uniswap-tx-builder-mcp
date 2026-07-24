@@ -17,7 +17,7 @@ COPY src/ ./src/
 RUN npx tsc
 
 FROM node:26-slim@sha256:715e55e4b84e4bb0ff48e49b398a848f08e55daed8eb6a0ea1839ae53bc57583
-LABEL io.modelcontextprotocol.server.name="io.github.yummybait-fin/uniswap-tx-builder-mcp"
+LABEL io.modelcontextprotocol.server.name="io.github.Yummybait-fin/uniswap-tx-builder-mcp"
 WORKDIR /app
 ENV NODE_ENV=production
 COPY package.json package-lock.json ./

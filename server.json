@@ -1,6 +1,6 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.yummybait-fin/uniswap-tx-builder-mcp",
+  "name": "io.github.Yummybait-fin/uniswap-tx-builder-mcp",
   "description": "Builds and simulates unsigned Uniswap v3 liquidity-position transactions — keyless, never signs.",
   "repository": {
     "url": "https://github.com/Yummybait-fin/uniswap-tx-builder-mcp",
