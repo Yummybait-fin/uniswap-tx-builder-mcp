@@ -1,0 +1,27 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.yummybait-fin/uniswap-tx-builder-mcp",
+  "description": "Keyless MCP server that builds unsigned Uniswap v3 liquidity-position transactions (collect, close, mint, increase, wrap/swap via Universal Router) and simulates them — you sign with your own wallet.",
+  "repository": {
+    "url": "https://github.com/Yummybait-fin/uniswap-tx-builder-mcp",
+    "source": "github"
+  },
+  "version": "0.3.2",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@yummybait/uniswap-tx-builder-mcp",
+      "version": "0.3.2",
+      "transport": {
+        "type": "stdio"
+      }
+    },
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/yummybait-fin/uniswap-tx-builder-mcp:0.3.2",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

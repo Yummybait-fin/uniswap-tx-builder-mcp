@@ -50,6 +50,23 @@ jobs:
             plugin.version = version;
             fs.writeFileSync(path, JSON.stringify(plugin, null, 2) + "\n");
           '
+      - name: Sync server.json to the same version
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const { version } = require("./package.json");
+            const path = "./server.json";
+            const server = JSON.parse(fs.readFileSync(path, "utf8"));
+            server.version = version;
+            for (const pkg of server.packages) {
+              if (pkg.registryType === "oci") {
+                pkg.identifier = pkg.identifier.replace(/:[^:]+$/, `:${version}`);
+              } else {
+                pkg.version = version;
+              }
+            }
+            fs.writeFileSync(path, JSON.stringify(server, null, 2) + "\n");
+          '
       - name: Commit the bump to main
         run: |
           if git diff --quiet; then
@@ -152,3 +169,51 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # Publish server.json to the official MCP Registry (registry.modelcontextprotocol.io).
+  # Runs after npm/docker so the registry's ownership checks — mcpName in the
+  # published package.json, the io.modelcontextprotocol.server.name image
+  # label — have something live to verify against. Auth is GitHub OIDC: the
+  # repo's org (Yummybait-fin) owns the io.github.yummybait-fin/* namespace,
+  # so there's no secret to provision, even for the first-ever publish.
+  mcp-registry:
+    needs: [npm, docker]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC: MCP Registry github-oidc auth
+    env:
+      # mcp-publisher has no Dependabot ecosystem (it's a raw release
+      # download, not an Action or package manifest) — bump by hand against
+      # https://github.com/modelcontextprotocol/registry/releases.
+      MCP_PUBLISHER_VERSION: v1.8.0
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Version server.json from tag
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const version = process.env.GITHUB_REF_NAME.replace(/^v/, "");
+            const path = "./server.json";
+            const server = JSON.parse(fs.readFileSync(path, "utf8"));
+            server.version = version;
+            for (const pkg of server.packages) {
+              if (pkg.registryType === "oci") {
+                pkg.identifier = pkg.identifier.replace(/:[^:]+$/, `:${version}`);
+              } else {
+                pkg.version = version;
+              }
+            }
+            fs.writeFileSync(path, JSON.stringify(server, null, 2) + "\n");
+          '
+
+      - name: Install mcp-publisher
+        run: |
+          curl -sL "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+
+      - name: Authenticate to MCP Registry
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish server to MCP Registry
+        run: ./mcp-publisher publish
