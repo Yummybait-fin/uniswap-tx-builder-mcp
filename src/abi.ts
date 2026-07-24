@@ -136,11 +136,30 @@ export const nfpmAbi = [
     inputs: [{ name: "data", type: "bytes[]" }],
     outputs: [{ name: "results", type: "bytes[]" }],
   },
+
+  // ── read (ERC-721 enumerable, used by get_positions) ──────────────
+  {
+    name: "balanceOf",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "owner", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    name: "tokenOfOwnerByIndex",
+    type: "function",
+    stateMutability: "view",
+    inputs: [
+      { name: "owner", type: "address" },
+      { name: "index", type: "uint256" },
+    ],
+    outputs: [{ name: "tokenId", type: "uint256" }],
+  },
 ] as const;
 
 /**
- * Minimal ERC-20 ABI — only `decimals`, used to convert human token amounts
- * to wei when planning a position.
+ * Minimal ERC-20 ABI — `decimals` (convert human token amounts to wei when
+ * planning a position) and `approve` (grant a spender an allowance).
  */
 export const erc20Abi = [
   {
@@ -149,6 +168,16 @@ export const erc20Abi = [
     stateMutability: "view",
     inputs: [],
     outputs: [{ name: "", type: "uint8" }],
+  },
+  {
+    name: "approve",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "spender", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
   },
 ] as const;
 

@@ -6,9 +6,11 @@
  * simulation throws {@link SimulationError} so a caller can distinguish a
  * reverted dry-run from a malformed request.
  */
-import type { Address } from "viem";
+import { type Address, maxUint256 } from "viem";
 
 import {
+  type ApproveParams,
+  type OwnedPosition,
   type PlanPositionParams,
   type PlanPositionResult,
   type PoolStateParams,
@@ -16,6 +18,7 @@ import {
   type SwapParams,
   type UnsignedTx,
   type WrapParams,
+  buildApproveTx,
   buildCloseTx,
   buildCollectTx,
   buildIncreaseLiquidityTx,
@@ -23,6 +26,7 @@ import {
   buildSwapTx,
   buildWrapTx,
   getPoolState,
+  getPositionsByOwner,
   planPosition,
   simulateTx,
   toUnsignedRlp,
@@ -204,6 +208,21 @@ export async function poolStateOp(
   return getPoolState(args);
 }
 
+export interface PositionsArgs {
+  chainId: number;
+  owner: Address;
+}
+
+export interface PositionsResult {
+  owner: Address;
+  positions: OwnedPosition[];
+}
+
+export async function positionsOp(args: PositionsArgs): Promise<PositionsResult> {
+  const positions = await getPositionsByOwner(args.chainId, args.owner);
+  return { owner: args.owner, positions };
+}
+
 // Wrap/swap txs are payable and spend the sender's native ETH, so simulation
 // needs the actual signer as `from` — `sender` opts it in (unlike collect/
 // close, where `recipient` doubles as a plausible `from`).
@@ -266,5 +285,27 @@ export async function swapOp(args: SwapArgs): Promise<TxResult> {
     rlp: toUnsignedRlp(tx),
     simulated,
     description,
+  };
+}
+
+export interface ApproveArgs extends ApproveParams {
+  sender?: Address; // simulation `from`; must be the token holder granting the allowance
+  simulate?: boolean; // default: on when `sender` is provided
+}
+
+export async function approveOp(args: ApproveArgs): Promise<TxResult> {
+  const tx = buildApproveTx(args);
+  const simulated = await maybeSimulateAsSender(
+    args.chainId,
+    tx,
+    args.sender,
+    args.simulate,
+  );
+  const amount = args.amount === maxUint256 ? "unlimited" : `${args.amount} wei`;
+  return {
+    tx,
+    rlp: toUnsignedRlp(tx),
+    simulated,
+    description: `Approve ${args.spender} to spend ${amount} of ${args.token}`,
   };
 }
