@@ -18,6 +18,7 @@ import {
   planOp,
   poolStateOp,
   positionsOp,
+  quoteSwapOp,
   swapOp,
   wrapOp,
 } from "./operations.js";
@@ -434,6 +435,40 @@ export function buildServer(): McpServer {
           sender: args.sender as Address | undefined,
           deadline: args.deadline,
           simulate: args.simulate,
+        }),
+      ),
+  );
+
+  server.registerTool(
+    "get_swap_quote",
+    {
+      title: "Quote a token→token swap (Uniswap v3 QuoterV2)",
+      description:
+        "READ-ONLY (builds no tx). Quotes an exact-in single-hop `tokenIn` → `tokenOut` swap " +
+        "(the same shape build_swap executes) via QuoterV2.quoteExactInputSingle — the live " +
+        "amountOut the pool would give at its CURRENT price, without sending a tx. Returns " +
+        "amountOut (wei), amountOutMin (amountOut after slippageBps, default 0.5% — feed this " +
+        "straight into build_swap), sqrtPriceX96After, initializedTicksCrossed, and gasEstimate. " +
+        "Call this immediately before build_swap: a quote read even a block earlier can go stale " +
+        "enough that the amountOutMin it produced reverts the swap.",
+      inputSchema: {
+        chainId: z.number().int(),
+        tokenIn: addressSchema,
+        tokenOut: addressSchema,
+        amountInWei: uintStringSchema,
+        fee: z.number().int(),
+        slippageBps: z.number().int().optional(),
+      },
+    },
+    async (args) =>
+      run("get_swap_quote", args, () =>
+        quoteSwapOp({
+          chainId: args.chainId,
+          tokenIn: args.tokenIn as Address,
+          tokenOut: args.tokenOut as Address,
+          amountInWei: BigInt(args.amountInWei),
+          fee: args.fee,
+          slippageBps: args.slippageBps,
         }),
       ),
   );

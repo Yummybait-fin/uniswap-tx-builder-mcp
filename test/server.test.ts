@@ -17,6 +17,7 @@ vi.mock("../src/operations.js", async (importOriginal) => {
     positionsOp: vi.fn(),
     wrapOp: vi.fn(),
     swapOp: vi.fn(),
+    quoteSwapOp: vi.fn(),
     approveOp: vi.fn(),
   };
 });
@@ -30,6 +31,7 @@ import {
   planOp,
   poolStateOp,
   positionsOp,
+  quoteSwapOp,
   swapOp,
   wrapOp,
 } from "../src/operations.js";
@@ -50,6 +52,7 @@ const TOOL_NAMES = [
   "get_positions",
   "build_wrap",
   "build_swap",
+  "get_swap_quote",
 ];
 
 /** A connected client/server pair over an in-memory transport. */
@@ -68,7 +71,7 @@ beforeEach(() => {
 });
 
 describe("buildServer", () => {
-  it("exposes all ten tools", async () => {
+  it("exposes all eleven tools", async () => {
     const client = await connect();
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([...TOOL_NAMES].sort());
@@ -284,6 +287,25 @@ describe("buildServer", () => {
         sender: RECIPIENT,
         deadline: undefined,
         simulate: undefined,
+      },
+    },
+    {
+      tool: "get_swap_quote",
+      op: quoteSwapOp,
+      args: {
+        chainId: 1,
+        tokenIn: TOKEN1,
+        tokenOut: TOKEN0,
+        amountInWei: "5000000",
+        fee: 3000,
+      },
+      expected: {
+        chainId: 1,
+        tokenIn: TOKEN1,
+        tokenOut: TOKEN0,
+        amountInWei: 5_000_000n,
+        fee: 3000,
+        slippageBps: undefined,
       },
     },
   ])("routes $tool to its op with coerced args", async ({ tool, op, args, expected }) => {

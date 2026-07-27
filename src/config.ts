@@ -8,6 +8,8 @@ export interface ChainConfig {
   universalRouter: Address;
   /** Canonical wrapped-native token (WETH9; WMATIC on Polygon). */
   weth9: Address;
+  /** QuoterV2 — off-chain (eth_call) swap quoting, no tx involved. */
+  quoterV2: Address;
 }
 
 /**
@@ -24,6 +26,10 @@ const CANONICAL_FACTORY: Address =
   "0x1F98431c8aD98523631AE4a59f267346ea31F984";
 const UNIVERSAL_ROUTER_V1_2: Address =
   "0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD";
+// Same CREATE2 address on every chain here except Base (verified via
+// eth_getCode, mirroring the NFPM/factory split above).
+const CANONICAL_QUOTER_V2: Address =
+  "0x61fFE014bA17989E743c5F6cB21bF9697530B21e";
 
 const chains: Record<number, ChainConfig> = {
   1: {
@@ -32,6 +38,7 @@ const chains: Record<number, ChainConfig> = {
     factory: CANONICAL_FACTORY,
     universalRouter: UNIVERSAL_ROUTER_V1_2,
     weth9: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+    quoterV2: CANONICAL_QUOTER_V2,
   },
   10: {
     rpcUrl: process.env.RPC_OP ?? "https://mainnet.optimism.io",
@@ -39,6 +46,7 @@ const chains: Record<number, ChainConfig> = {
     factory: CANONICAL_FACTORY,
     universalRouter: UNIVERSAL_ROUTER_V1_2,
     weth9: "0x4200000000000000000000000000000000000006",
+    quoterV2: CANONICAL_QUOTER_V2,
   },
   137: {
     rpcUrl: process.env.RPC_POLYGON ?? "https://polygon-rpc.com",
@@ -46,6 +54,7 @@ const chains: Record<number, ChainConfig> = {
     factory: CANONICAL_FACTORY,
     universalRouter: UNIVERSAL_ROUTER_V1_2,
     weth9: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270", // WMATIC
+    quoterV2: CANONICAL_QUOTER_V2,
   },
   8453: {
     rpcUrl: process.env.RPC_BASE ?? "https://mainnet.base.org",
@@ -53,6 +62,7 @@ const chains: Record<number, ChainConfig> = {
     factory: "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
     universalRouter: UNIVERSAL_ROUTER_V1_2,
     weth9: "0x4200000000000000000000000000000000000006",
+    quoterV2: "0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a",
   },
   42161: {
     rpcUrl: process.env.RPC_ARB ?? "https://arb1.arbitrum.io/rpc",
@@ -60,6 +70,7 @@ const chains: Record<number, ChainConfig> = {
     factory: CANONICAL_FACTORY,
     universalRouter: UNIVERSAL_ROUTER_V1_2,
     weth9: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+    quoterV2: CANONICAL_QUOTER_V2,
   },
 };
 

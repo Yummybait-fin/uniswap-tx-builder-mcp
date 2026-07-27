@@ -16,6 +16,8 @@ import {
   type PlanPositionResult,
   type PoolStateParams,
   type PoolStateResult,
+  type QuoteSwapParams,
+  type QuoteSwapResult,
   type SwapParams,
   type UnsignedTx,
   type WrapParams,
@@ -34,6 +36,7 @@ import {
   decodeMulticallResults,
   getPoolState,
   getPositionsByOwner,
+  getSwapQuote,
   planPosition,
   simulateTx,
   toUnsignedRlp,
@@ -320,6 +323,12 @@ export async function wrapOp(args: WrapArgs): Promise<TxResult> {
     simulated,
     description: `Wrap ${args.amountWei} wei native ETH to WETH via Universal Router`,
   };
+}
+
+export async function quoteSwapOp(
+  args: QuoteSwapParams,
+): Promise<QuoteSwapResult> {
+  return getSwapQuote(args);
 }
 
 export interface SwapArgs extends SwapParams {

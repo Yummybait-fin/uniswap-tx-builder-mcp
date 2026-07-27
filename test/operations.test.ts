@@ -18,6 +18,7 @@ vi.mock("../src/builder.js", () => ({
   decodeMulticallResults: vi.fn(),
   getPoolState: vi.fn(),
   getPositionsByOwner: vi.fn(),
+  getSwapQuote: vi.fn(),
   planPosition: vi.fn(),
   simulateTx: vi.fn(),
   toUnsignedRlp: vi.fn(() => "0xr1p"),
@@ -39,6 +40,7 @@ import {
   decodeMulticallResults,
   getPoolState,
   getPositionsByOwner,
+  getSwapQuote,
   planPosition,
   simulateTx,
 } from "../src/builder.js";
@@ -52,6 +54,7 @@ import {
   planOp,
   poolStateOp,
   positionsOp,
+  quoteSwapOp,
   swapOp,
   wrapOp,
 } from "../src/operations.js";
@@ -404,5 +407,30 @@ describe("swapOp", () => {
     expect(res.description).toBe(
       `Universal Router: swap 5 wei ${TOKEN0} → native ETH (fee 3000), unwrap WETH to native ETH`,
     );
+  });
+});
+
+// ── quoteSwapOp ──────────────────────────────────────────────────────
+
+describe("quoteSwapOp", () => {
+  it("passes args straight through to getSwapQuote", async () => {
+    const quote = {
+      amountOut: "1000000",
+      amountOutMin: "995000",
+      sqrtPriceX96After: "12345",
+      initializedTicksCrossed: 2,
+      gasEstimate: "90000",
+    };
+    vi.mocked(getSwapQuote).mockResolvedValueOnce(quote);
+
+    const args = {
+      chainId: 1,
+      tokenIn: TOKEN0,
+      tokenOut: TOKEN1,
+      amountInWei: 5_000_000n,
+      fee: 3000,
+    };
+    await expect(quoteSwapOp(args)).resolves.toEqual(quote);
+    expect(getSwapQuote).toHaveBeenCalledWith(args);
   });
 });
