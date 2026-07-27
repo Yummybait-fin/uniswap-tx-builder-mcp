@@ -311,18 +311,20 @@ describe("wrapOp", () => {
 });
 
 describe("swapOp", () => {
+  const WETH9 = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" as const;
   const ARGS = {
     chainId: 1,
+    tokenIn: WETH9,
     amountInWei: 5n,
     tokenOut: TOKEN0,
     fee: 3000,
     amountOutMin: 1n,
   };
 
-  it("describes a plain WETH swap", async () => {
+  it("describes a plain swap", async () => {
     const res = await swapOp(ARGS);
     expect(res.description).toBe(
-      `Universal Router: swap 5 wei WETH → ${TOKEN0} (fee 3000)`,
+      `Universal Router: swap 5 wei ${WETH9} → ${TOKEN0} (fee 3000)`,
     );
     expect(res.simulated).toBe(false);
   });
@@ -331,7 +333,14 @@ describe("swapOp", () => {
     const res = await swapOp({ ...ARGS, wrapWei: 9n, sender: RECIPIENT });
     expect(simulateTx).toHaveBeenCalledWith(1, TX, RECIPIENT);
     expect(res.description).toBe(
-      `Universal Router: wrap 9 wei native ETH, swap 5 wei WETH → ${TOKEN0} (fee 3000), sweep WETH remainder`,
+      `Universal Router: wrap 9 wei native ETH, swap 5 wei ${WETH9} → ${TOKEN0} (fee 3000), sweep WETH remainder`,
+    );
+  });
+
+  it("describes an unwrap-out swap", async () => {
+    const res = await swapOp({ ...ARGS, tokenIn: TOKEN0, tokenOut: WETH9, unwrapOut: true });
+    expect(res.description).toBe(
+      `Universal Router: swap 5 wei ${TOKEN0} → native ETH (fee 3000), unwrap WETH to native ETH`,
     );
   });
 });

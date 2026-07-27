@@ -385,23 +385,29 @@ export function buildServer(): McpServer {
   server.registerTool(
     "build_swap",
     {
-      title: "Build a WETH→token swap transaction (Universal Router)",
+      title: "Build a token→token swap transaction (Universal Router)",
       description:
-        "Build an UNSIGNED tx that swaps `amountInWei` WETH for `tokenOut` (exact-in, " +
-        "single hop through the `fee` pool) via the Universal Router. With `wrapWei` " +
-        "(≥ amountInWei) the tx is payable and wraps that much native ETH first, swaps " +
-        "amountInWei of it, and sweeps the WETH remainder — use this when the wallet " +
-        "holds native ETH. Without wrapWei the wallet's WETH pays via Permit2 (needs a " +
-        "Permit2 approval). `recipient` defaults to the tx sender. Returns the tx plus " +
-        "unsigned rlp. Pass `sender` to eth_call-simulate before signing.",
+        "Build an UNSIGNED tx that swaps `amountInWei` of `tokenIn` for `tokenOut` " +
+        "(exact-in, single hop through the `fee` pool) via the Universal Router. By " +
+        "default `tokenIn` pays via Permit2 (needs a Permit2 approval). With `wrapWei` " +
+        "(≥ amountInWei, requires tokenIn = WETH9) the tx is payable and wraps that much " +
+        "native ETH first, swaps amountInWei of it, and sweeps the WETH remainder — use " +
+        "this when the wallet holds native ETH instead of WETH. With `unwrapOut` " +
+        "(requires tokenOut = WETH9) the swap output is unwrapped to native ETH before " +
+        "reaching `recipient` — use this to sell a token for ETH. `wrapWei` and " +
+        "`unwrapOut` are mutually exclusive. `recipient` defaults to the tx sender. " +
+        "Returns the tx plus unsigned rlp. Pass `sender` to eth_call-simulate before " +
+        "signing.",
       inputSchema: {
         chainId: z.number().int(),
+        tokenIn: addressSchema,
         amountInWei: uintStringSchema,
         tokenOut: addressSchema,
         fee: z.number().int(),
         amountOutMin: uintStringSchema,
         recipient: addressSchema.optional(),
         wrapWei: uintStringSchema.optional(),
+        unwrapOut: z.boolean().optional(),
         sender: addressSchema.optional(),
         deadline: z.number().int().positive().optional(),
         simulate: z.boolean().optional(),
@@ -411,12 +417,14 @@ export function buildServer(): McpServer {
       run("build_swap", args, () =>
         swapOp({
           chainId: args.chainId,
+          tokenIn: args.tokenIn as Address,
           amountInWei: BigInt(args.amountInWei),
           tokenOut: args.tokenOut as Address,
           fee: args.fee,
           amountOutMin: BigInt(args.amountOutMin),
           recipient: args.recipient as Address | undefined,
           wrapWei: args.wrapWei === undefined ? undefined : BigInt(args.wrapWei),
+          unwrapOut: args.unwrapOut,
           sender: args.sender as Address | undefined,
           deadline: args.deadline,
           simulate: args.simulate,

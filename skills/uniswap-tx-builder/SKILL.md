@@ -28,7 +28,7 @@ wallet MCP `send_transaction`). If your signer manages nonces itself, serialize 
 | `build_increase` | `chainId, positionId, amount0Desired, amount1Desired, recipient, slippageBps?, simulate?` | Add liquidity to an **existing** position. |
 | `build_approve` | `chainId, token, spender, amount, sender?, simulate?` | Approve `spender` (e.g. the NFPM, or Permit2) to move up to `amount` of `token`. `amount: "max"` for an unlimited (uint256 max) allowance. |
 | `build_wrap` | `chainId, amountWei, recipient?, sender?, deadline?, simulate?` | Native ETH → WETH via Universal Router `WRAP_ETH` (payable; works under UR-allowlisting wallet policies where `WETH.deposit()` doesn't). |
-| `build_swap` | `chainId, amountInWei, tokenOut, fee, amountOutMin, recipient?, wrapWei?, sender?, deadline?, simulate?` | Exact-in single-hop WETH → `tokenOut`. With `wrapWei` (≥ `amountInWei`): wraps that much native ETH, swaps `amountInWei`, sweeps the WETH remainder — one payable tx. Without it: pays WETH via **Permit2** (needs a Permit2 approval). |
+| `build_swap` | `chainId, tokenIn, amountInWei, tokenOut, fee, amountOutMin, recipient?, wrapWei?, unwrapOut?, sender?, deadline?, simulate?` | Exact-in single-hop `tokenIn` → `tokenOut`. Pays `tokenIn` via **Permit2** by default (needs a Permit2 approval). With `wrapWei` (≥ `amountInWei`, requires `tokenIn` = WETH9): wraps that much native ETH first, swaps `amountInWei`, sweeps the WETH remainder — one payable tx, for wallets holding native ETH instead of WETH. With `unwrapOut` (requires `tokenOut` = WETH9): unwraps the swap output to native ETH before it reaches `recipient` — for selling a token for ETH. `wrapWei` and `unwrapOut` are mutually exclusive. |
 | `plan_position` | `chainId, token0, token1, fee, priceLower, priceUpper, amount0?, amount1?` | **Read-only.** Human price range + human amounts → aligned ticks + wei amounts. |
 | `get_pool_state` | `chainId, token0, token1, fee, rangePct?, tickLower?, tickUpper?, balance0?, balance1?` | **Read-only.** Live `pool`, `tick`, `sqrtPriceX96`, `price` (token1 per token0, human), `tickSpacing`. See below. |
 | `get_positions` | `chainId, owner` | **Read-only.** Every position NFT `owner` holds (token0/1, fee, tickLower/Upper, liquidity, tokensOwed0/1). Feed a `positionId` into `build_collect`/`build_close`/`build_increase`. |
@@ -77,7 +77,8 @@ For `build_mint` and `build_increase`, your wallet must hold the input tokens **
 ERC-20 approval to the NonfungiblePositionManager** beforehand — build that approval with
 `build_approve` (`spender` = the chain's NFPM address) and sign it first. (This is also why
 `build_mint`/`build_increase`'s `simulate` is off by default — the dry-run reverts without an
-approval in place already.) A Permit2-paid `build_swap` (no `wrapWei`) similarly needs a
+approval in place already.) A Permit2-paid `build_swap` (no `wrapWei`, the default payment path
+for any `tokenIn`) similarly needs a
 `build_approve` for Permit2 (`0x000000000022D473030F116dDEE9F6B43aC78BA` on every EVM chain) as
 `spender` beforehand. `build_wrap`/`build_swap` use the Universal Router v1.2
 (`0x3fC91A3a…B2b7FAD`) — the address wallet policies typically allowlist.

@@ -263,6 +263,7 @@ describe("buildServer", () => {
       op: swapOp,
       args: {
         chainId: 1,
+        tokenIn: TOKEN1,
         amountInWei: "5",
         tokenOut: TOKEN0,
         fee: 3000,
@@ -272,12 +273,14 @@ describe("buildServer", () => {
       },
       expected: {
         chainId: 1,
+        tokenIn: TOKEN1,
         amountInWei: 5n,
         tokenOut: TOKEN0,
         fee: 3000,
         amountOutMin: 1n,
         recipient: undefined,
         wrapWei: 9n,
+        unwrapOut: undefined,
         sender: RECIPIENT,
         deadline: undefined,
         simulate: undefined,

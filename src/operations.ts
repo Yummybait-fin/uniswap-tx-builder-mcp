@@ -275,11 +275,16 @@ export async function swapOp(args: SwapArgs): Promise<TxResult> {
     args.sender,
     args.simulate,
   );
-  const swap = `swap ${args.amountInWei} wei WETH → ${args.tokenOut} (fee ${args.fee})`;
-  const description =
-    args.wrapWei === undefined
-      ? `Universal Router: ${swap}`
-      : `Universal Router: wrap ${args.wrapWei} wei native ETH, ${swap}, sweep WETH remainder`;
+  const swapOut = args.unwrapOut ? "native ETH" : args.tokenOut;
+  const swap = `swap ${args.amountInWei} wei ${args.tokenIn} → ${swapOut} (fee ${args.fee})`;
+  let description: string;
+  if (args.wrapWei !== undefined) {
+    description = `Universal Router: wrap ${args.wrapWei} wei native ETH, ${swap}, sweep WETH remainder`;
+  } else if (args.unwrapOut) {
+    description = `Universal Router: ${swap}, unwrap WETH to native ETH`;
+  } else {
+    description = `Universal Router: ${swap}`;
+  }
   return {
     tx,
     rlp: toUnsignedRlp(tx),
