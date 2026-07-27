@@ -284,6 +284,8 @@ describe("buildServer", () => {
         recipient: undefined,
         wrapWei: 9n,
         unwrapOut: undefined,
+        permit2: undefined,
+        permit2Signature: undefined,
         sender: RECIPIENT,
         deadline: undefined,
         simulate: undefined,
@@ -319,6 +321,56 @@ describe("buildServer", () => {
     expect(res.isError).toBeFalsy();
     const [content] = res.content as Array<{ type: string; text: string }>;
     expect(JSON.parse(content.text)).toEqual(payload);
+  });
+
+  it("passes permit2/permit2Signature through to build_swap untouched", async () => {
+    const payload = { permit2Required: true, description: "sign this" };
+    vi.mocked(swapOp).mockResolvedValueOnce(payload as never);
+    const permit2 = {
+      details: { token: TOKEN0, amount: "5", expiration: 1783161774, nonce: 3 },
+      spender: RECIPIENT,
+      sigDeadline: 1783161474,
+    };
+
+    const client = await connect();
+    const res = await client.callTool({
+      name: "build_swap",
+      arguments: {
+        chainId: 1,
+        tokenIn: TOKEN1,
+        amountInWei: "5",
+        tokenOut: TOKEN0,
+        fee: 3000,
+        amountOutMin: "1",
+        sender: RECIPIENT,
+        permit2,
+        permit2Signature: "0xabcd",
+      },
+    });
+
+    expect(swapOp).toHaveBeenCalledWith(
+      expect.objectContaining({ permit2, permit2Signature: "0xabcd" }),
+    );
+    expect(res.isError).toBeFalsy();
+    expect(JSON.parse((res.content as Array<{ text: string }>)[0].text)).toEqual(payload);
+  });
+
+  it("rejects a malformed permit2Signature before reaching the op", async () => {
+    const client = await connect();
+    const res = await client.callTool({
+      name: "build_swap",
+      arguments: {
+        chainId: 1,
+        tokenIn: TOKEN1,
+        amountInWei: "5",
+        tokenOut: TOKEN0,
+        fee: 3000,
+        amountOutMin: "1",
+        permit2Signature: "not-hex",
+      },
+    });
+    expect(res.isError).toBe(true);
+    expect(swapOp).not.toHaveBeenCalled();
   });
 
   it('coerces build_approve amount="max" to uint256 max', async () => {

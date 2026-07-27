@@ -7,6 +7,7 @@ import { erc20Abi, nfpmAbi } from "../src/abi.js";
 
 const mockReadContract = vi.fn();
 const mockCall = vi.fn();
+const mockVerifyTypedData = vi.fn();
 
 vi.mock("viem", async (importOriginal) => {
   const actual = await importOriginal<typeof import("viem")>();
@@ -15,6 +16,7 @@ vi.mock("viem", async (importOriginal) => {
     createPublicClient: () => ({
       readContract: mockReadContract,
       call: mockCall,
+      verifyTypedData: mockVerifyTypedData,
     }),
   };
 });
@@ -25,17 +27,20 @@ import {
   buildCollectTx,
   buildIncreaseLiquidityTx,
   buildMintTx,
+  checkPermit2Requirement,
   decodeApproveResult,
   decodeCollectResult,
   decodeDecreaseLiquidityResult,
   decodeIncreaseLiquidityResult,
   decodeMintResult,
   decodeMulticallResults,
+  getPermit2Allowance,
   getPoolState,
   getPositionsByOwner,
   getSwapQuote,
   planPosition,
   simulateTx,
+  verifyPermit2Signature,
 } from "../src/builder.js";
 import { computeMintAmounts } from "../src/ticks.js";
 
@@ -728,5 +733,126 @@ describe("getPoolState", () => {
       amount1Desired: expected.amount1Desired.toString(),
       limitingSide: expected.limitingSide,
     });
+  });
+});
+
+// ── Permit2 allowance / typed-data helpers ────────────────────────────
+
+describe("getPermit2Allowance", () => {
+  const UR = "0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD";
+  const PERMIT2 = "0x000000000022D473030F116dDEE9F6B43aC78BA";
+
+  beforeEach(() => {
+    mockReadContract.mockClear();
+  });
+
+  it("reads amount/expiration/nonce from Permit2.allowance", async () => {
+    mockReadContract.mockResolvedValueOnce([1000n, 1783161774, 3]);
+
+    const allowance = await getPermit2Allowance(1, RECIPIENT, TOKEN0, UR);
+
+    expect(mockReadContract).toHaveBeenCalledWith(
+      expect.objectContaining({
+        address: PERMIT2,
+        functionName: "allowance",
+        args: [RECIPIENT, TOKEN0, UR],
+      }),
+    );
+    expect(allowance).toEqual({ amount: 1000n, expiration: 1783161774, nonce: 3 });
+  });
+});
+
+describe("checkPermit2Requirement", () => {
+  const UR = "0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD";
+
+  beforeEach(() => {
+    mockReadContract.mockClear();
+  });
+
+  it("reports sufficient when the standing allowance covers the amount and isn't near expiry", async () => {
+    const farFuture = Math.floor(Date.now() / 1000) + 10_000;
+    mockReadContract.mockResolvedValueOnce([5000n, farFuture, 3]);
+
+    const requirement = await checkPermit2Requirement(1, RECIPIENT, TOKEN0, 1000n);
+
+    expect(requirement).toEqual({ sufficient: true });
+  });
+
+  it("reports insufficient and returns a fresh PermitSingle when the allowance is too small", async () => {
+    const farFuture = Math.floor(Date.now() / 1000) + 10_000;
+    mockReadContract.mockResolvedValueOnce([500n, farFuture, 7]);
+
+    const requirement = await checkPermit2Requirement(1, RECIPIENT, TOKEN0, 1000n);
+
+    expect(requirement.sufficient).toBe(false);
+    const now = Math.floor(new Date("2026-01-15T12:00:00Z").getTime() / 1000);
+    expect(requirement.permit).toEqual({
+      details: { token: TOKEN0, amount: "1000", expiration: now + 300, nonce: 7 },
+      spender: UR,
+      sigDeadline: now + 300,
+    });
+    expect(requirement.typedData).toEqual({
+      domain: {
+        name: "Permit2",
+        chainId: 1,
+        verifyingContract: "0x000000000022D473030F116dDEE9F6B43aC78BA",
+      },
+      types: expect.objectContaining({ PermitSingle: expect.any(Array) }),
+      primaryType: "PermitSingle",
+      message: requirement.permit,
+    });
+  });
+
+  it("reports insufficient when the allowance covers the amount but expires too soon", async () => {
+    const almostNow = Math.floor(Date.now() / 1000) + 10; // inside the 60s safety margin
+    mockReadContract.mockResolvedValueOnce([5000n, almostNow, 2]);
+
+    const requirement = await checkPermit2Requirement(1, RECIPIENT, TOKEN0, 1000n);
+
+    expect(requirement.sufficient).toBe(false);
+  });
+});
+
+describe("verifyPermit2Signature", () => {
+  const UR = "0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD";
+  const PERMIT = {
+    details: { token: TOKEN0, amount: "1000", expiration: 1783161774, nonce: 3 },
+    spender: UR,
+    sigDeadline: 1783161474,
+  };
+  const SIGNATURE = `0x${"ab".repeat(65)}` as const;
+
+  beforeEach(() => {
+    mockVerifyTypedData.mockClear();
+  });
+
+  it("verifies the signature against the Permit2 domain and message", async () => {
+    mockVerifyTypedData.mockResolvedValueOnce(true);
+
+    const valid = await verifyPermit2Signature(1, RECIPIENT, PERMIT, SIGNATURE);
+
+    expect(valid).toBe(true);
+    expect(mockVerifyTypedData).toHaveBeenCalledWith({
+      address: RECIPIENT,
+      domain: {
+        name: "Permit2",
+        chainId: 1,
+        verifyingContract: "0x000000000022D473030F116dDEE9F6B43aC78BA",
+      },
+      types: expect.objectContaining({ PermitSingle: expect.any(Array) }),
+      primaryType: "PermitSingle",
+      message: {
+        details: { token: TOKEN0, amount: 1000n, expiration: 1783161774, nonce: 3 },
+        spender: UR,
+        sigDeadline: 1783161474n,
+      },
+      signature: SIGNATURE,
+    });
+  });
+
+  it("propagates a false result for a mismatched signature", async () => {
+    mockVerifyTypedData.mockResolvedValueOnce(false);
+    const valid = await verifyPermit2Signature(1, RECIPIENT, PERMIT, SIGNATURE);
+    expect(valid).toBe(false);
   });
 });

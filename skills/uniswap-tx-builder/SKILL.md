@@ -1,6 +1,6 @@
 ---
 name: uniswap-tx-builder
-description: Build unsigned Uniswap v3 liquidity-position transactions with the uniswap-tx-builder MCP — list a wallet's positions, collect fees, close (remove liquidity + collect, optionally burn), mint a new position, increase liquidity, approve ERC-20 spending limits, wrap native ETH / swap WETH via the Universal Router, quote swaps via QuoterV2, read live pool state, and plan a position from a human price range — simulate them, then hand the calldata (or the ready-made unsigned RLP) to your own wallet to sign. Use whenever you need to manage, rebalance, open, or close a Uniswap v3 LP position, or quote/execute a swap, through this MCP. Generic: no app- or wallet-specific knowledge.
+description: Build unsigned Uniswap v3 liquidity-position transactions with the uniswap-tx-builder MCP — list a wallet's positions, collect fees, close (remove liquidity + collect, optionally burn), mint a new position, increase liquidity, approve ERC-20 spending limits, wrap native ETH / swap WETH via the Universal Router (optionally paying via a signed Permit2 permit — no on-chain approval tx), quote swaps via QuoterV2, read live pool state, and plan a position from a human price range — simulate them, then hand the calldata (or the ready-made unsigned RLP) to your own wallet to sign. Use whenever you need to manage, rebalance, open, or close a Uniswap v3 LP position, or quote/execute a swap, through this MCP. Generic: no app- or wallet-specific knowledge.
 ---
 
 # uniswap-tx-builder
@@ -28,7 +28,7 @@ wallet MCP `send_transaction`). If your signer manages nonces itself, serialize 
 | `build_increase` | `chainId, positionId, amount0Desired, amount1Desired, recipient, slippageBps?, simulate?` | Add liquidity to an **existing** position. |
 | `build_approve` | `chainId, token, spender, amount, sender?, simulate?` | Approve `spender` (e.g. the NFPM, or Permit2) to move up to `amount` of `token`. `amount: "max"` for an unlimited (uint256 max) allowance. |
 | `build_wrap` | `chainId, amountWei, recipient?, sender?, deadline?, simulate?` | Native ETH → WETH via Universal Router `WRAP_ETH` (payable; works under UR-allowlisting wallet policies where `WETH.deposit()` doesn't). |
-| `build_swap` | `chainId, tokenIn, amountInWei, tokenOut, fee, amountOutMin, recipient?, wrapWei?, unwrapOut?, sender?, deadline?, simulate?` | Exact-in single-hop `tokenIn` → `tokenOut`. Pays `tokenIn` via **Permit2** by default (needs a Permit2 approval). With `wrapWei` (≥ `amountInWei`, requires `tokenIn` = WETH9): wraps that much native ETH first, swaps `amountInWei`, sweeps the WETH remainder — one payable tx, for wallets holding native ETH instead of WETH. With `unwrapOut` (requires `tokenOut` = WETH9): unwraps the swap output to native ETH before it reaches `recipient` — for selling a token for ETH. `wrapWei` and `unwrapOut` are mutually exclusive. Get `amountOutMin` from `get_swap_quote` right before calling this. |
+| `build_swap` | `chainId, tokenIn, amountInWei, tokenOut, fee, amountOutMin, recipient?, wrapWei?, unwrapOut?, permit2?, permit2Signature?, sender?, deadline?, simulate?` | Exact-in single-hop `tokenIn` → `tokenOut`. Pays `tokenIn` via **Permit2** by default. Pass `sender` and this auto-detects whether the allowance is enough — see [Permit2 payment](#permit2-payment-build_swap) below for the no-on-chain-approval flow. With `wrapWei` (≥ `amountInWei`, requires `tokenIn` = WETH9): wraps that much native ETH first, swaps `amountInWei`, sweeps the WETH remainder — one payable tx, for wallets holding native ETH instead of WETH (mutually exclusive with Permit2 payment/`permit2`). With `unwrapOut` (requires `tokenOut` = WETH9): unwraps the swap output to native ETH before it reaches `recipient` — for selling a token for ETH. `wrapWei` and `unwrapOut` are mutually exclusive. Get `amountOutMin` from `get_swap_quote` right before calling this. |
 | `get_swap_quote` | `chainId, tokenIn, tokenOut, amountInWei, fee, slippageBps?` | **Read-only.** Quotes the same exact-in single-hop shape as `build_swap` via Uniswap v3 **QuoterV2** (`quoteExactInputSingle`) — the live `amountOut` the pool would give at its current price, no tx sent. Returns `amountOut`, `amountOutMin` (`amountOut` after `slippageBps`, default 0.5% — feed straight into `build_swap`), `sqrtPriceX96After`, `initializedTicksCrossed`, `gasEstimate`. |
 | `plan_position` | `chainId, token0, token1, fee, priceLower, priceUpper, amount0?, amount1?` | **Read-only.** Human price range + human amounts → aligned ticks + wei amounts. |
 | `get_pool_state` | `chainId, token0, token1, fee, rangePct?, tickLower?, tickUpper?, balance0?, balance1?` | **Read-only.** Live `pool`, `tick`, `sqrtPriceX96`, `price` (token1 per token0, human), `tickSpacing`. See below. |
@@ -51,6 +51,29 @@ wallet MCP `send_transaction`). If your signer manages nonces itself, serialize 
   `get_swap_quote` for the expected swap output rather than reading it off the simulation.
 - `recipient` on wrap/swap **defaults to the tx sender** (the router's `MSG_SENDER` placeholder).
   Omit it unless the output must go to a different address.
+
+### Permit2 payment (`build_swap`)
+
+The default (non-`wrapWei`) swap path pays `tokenIn` via **Permit2**, which needs the Universal
+Router to have a sufficient allowance there. You never have to work this out by hand — pass
+`sender` and `build_swap` checks it for you:
+
+- **Sufficient standing allowance** (from a prior `build_approve` to Permit2 + an on-chain
+  Permit2 approval, or an earlier signed permit that's still live) → you get a normal tx back,
+  same as any other build tool.
+- **Insufficient** → instead of a tx, you get back
+  `{ permit2Required: true, typedData, permit, description }`. Sign `typedData` with `sender`'s
+  wallet (e.g. a `sign_typed_data` call — it's a standard EIP-712 signature, no on-chain
+  transaction involved), then call `build_swap` again with the **exact same args** plus
+  `permit2: <the returned "permit">` and `permit2Signature: <the signature>`. That call embeds a
+  `PERMIT2_PERMIT` command ahead of the swap, so the allowance is set **and** consumed atomically
+  in the swap's own tx — no separate on-chain Permit2 approval ever needed.
+
+Do no math and don't construct the permit struct yourself — always echo back the `permit` object
+exactly as returned; it's tied to the signature and won't validate if altered. The permit is
+scoped to this one swap (a few minutes' validity), not a standing grant, so there's nothing to
+revoke afterward. Omit `sender` (or already have `permit2`) and this check is skipped entirely —
+useful if you already know the allowance is sufficient, or already have a permit in hand.
 
 ### `get_pool_state` (live spot → range → mint amounts)
 
@@ -88,10 +111,15 @@ ERC-20 approval to the NonfungiblePositionManager** beforehand — build that ap
 `build_approve` (`spender` = the chain's NFPM address) and sign it first. (This is also why
 `build_mint`/`build_increase`'s `simulate` is off by default — the dry-run reverts without an
 approval in place already.) A Permit2-paid `build_swap` (no `wrapWei`, the default payment path
-for any `tokenIn`) similarly needs a
-`build_approve` for Permit2 (`0x000000000022D473030F116dDEE9F6B43aC78BA` on every EVM chain) as
-`spender` beforehand. `build_wrap`/`build_swap` use the Universal Router v1.2
-(`0x3fC91A3a…B2b7FAD`) — the address wallet policies typically allowlist.
+for any `tokenIn`) needs Permit2 to have an allowance for the Universal Router — either a
+standing one, built the same way (`build_approve` with `spender` = Permit2,
+`0x000000000022D473030F116dDEE9F6B43aC78BA` on every EVM chain, **followed by an on-chain Permit2
+approval** — a wallet-policy carve-out many setups don't have), **or** the signed-permit flow in
+[Permit2 payment](#permit2-payment-build_swap) above, which needs only a `sign_typed_data`
+capability scoped to the Permit2 contract and no separate on-chain approval tx at all — prefer
+this when the wallet's policy doesn't already allowlist calling Permit2 directly.
+`build_wrap`/`build_swap` use the Universal Router v1.2 (`0x3fC91A3a…B2b7FAD`) — the address
+wallet policies typically allowlist.
 
 ## Position lifecycle
 
@@ -104,9 +132,11 @@ for any `tokenIn`) similarly needs a
   (NFPM, if not already) → `build_mint` → sign. If the wallet holds native ETH instead of WETH:
   `get_swap_quote` → `build_swap` with `wrapWei` (or `build_wrap`) first, confirm, then recompute
   amounts and mint.
-- **Swap tokens:** `get_swap_quote` (amountOut → amountOutMin) → `build_approve` Permit2 (if not
-  already, and not using `wrapWei`) → `build_swap` → sign. Re-quote immediately before building —
-  a stale quote's `amountOutMin` can revert the swap.
+- **Swap tokens:** `get_swap_quote` (amountOut → amountOutMin) → `build_swap` with `sender` (not
+  using `wrapWei`) → if it comes back `permit2Required`, sign `typedData` and call `build_swap`
+  again with `permit2`/`permit2Signature` (see [Permit2 payment](#permit2-payment-build_swap)) →
+  sign the tx. Re-quote immediately before building — a stale quote's `amountOutMin` can revert
+  the swap.
 - **Open with a price range:** `plan_position` → `get_pool_state` (balances → amounts) →
   `build_approve` (NFPM) → `build_mint` → sign.
 - **Rebalance** = **close → mint a recentered range.** The mint amounts depend on the tokens

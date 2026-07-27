@@ -15,6 +15,7 @@ import {
   erc20Abi,
   factoryAbi,
   nfpmAbi,
+  permit2Abi,
   poolAbi,
   quoterV2Abi,
   universalRouterAbi,
@@ -668,6 +669,7 @@ export async function getPoolState(
 // UR command bytes (Commands.sol).
 const CMD_V3_SWAP_EXACT_IN = "00";
 const CMD_SWEEP = "04";
+const CMD_PERMIT2_PERMIT = "0a";
 const CMD_WRAP_ETH = "0b";
 const CMD_UNWRAP_WETH = "0c";
 
@@ -695,6 +697,211 @@ function urExecute(
     args: [commands, inputs, urDeadline(deadline)],
   });
   return { to: cfg.universalRouter, data, value: value.toString(), chainId };
+}
+
+// ─── Permit2 (signed AllowanceTransfer permit, embedded in a swap tx) ────────
+//
+// The default Permit2-paid swap path below needs a standing
+// Permit2.allowance(owner, tokenIn, universalRouter) — normally set via an
+// on-chain Permit2.approve(), a call many wallet policies don't allowlist.
+// Universal Router's PERMIT2_PERMIT command lets a signed, single-swap-scoped
+// PermitSingle be embedded ahead of the swap command instead: Permit2.permit()
+// and the swap's own Permit2.transferFrom() land atomically in the same tx, so
+// no separate approval tx — or wallet-policy carve-out for calling Permit2
+// directly — is ever needed. Only a `sign_typed_data` capability scoped to the
+// Permit2 verifying contract is required.
+
+const PERMIT2_DOMAIN_NAME = "Permit2"; // Permit2's EIP-712 domain has no `version` field.
+const PERMIT2_SIG_DEADLINE_SECS = 300; // the signature itself expires in 5 min if unused
+const PERMIT2_EXPIRATION_SECS = 300; // the allowance it sets also expires in 5 min — single-swap scoped, not a standing grant
+const PERMIT2_ALLOWANCE_SAFETY_MARGIN_SECS = 60; // don't treat a standing allowance as usable if it expires almost immediately
+
+const PERMIT2_TYPES = {
+  PermitSingle: [
+    { name: "details", type: "PermitDetails" },
+    { name: "spender", type: "address" },
+    { name: "sigDeadline", type: "uint256" },
+  ],
+  PermitDetails: [
+    { name: "token", type: "address" },
+    { name: "amount", type: "uint160" },
+    { name: "expiration", type: "uint48" },
+    { name: "nonce", type: "uint48" },
+  ],
+} as const;
+
+export interface Permit2Details {
+  token: Address;
+  amount: string; // uint160 wei, decimal string (exceeds JS safe integers)
+  expiration: number; // unix seconds
+  nonce: number;
+}
+
+export interface Permit2Single {
+  details: Permit2Details;
+  spender: Address;
+  sigDeadline: number; // unix seconds
+}
+
+export interface Permit2TypedData {
+  domain: { name: string; chainId: number; verifyingContract: Address };
+  types: typeof PERMIT2_TYPES;
+  primaryType: "PermitSingle";
+  message: Permit2Single;
+}
+
+function permit2Domain(chainId: number): Permit2TypedData["domain"] {
+  const cfg = getChain(chainId);
+  return { name: PERMIT2_DOMAIN_NAME, chainId, verifyingContract: cfg.permit2 };
+}
+
+// uint160 (`amount`)/uint256 (`sigDeadline`) decode as bigint; uint48
+// (`expiration`/`nonce`) decode as plain `number` — mirrored here since
+// `amount`/`sigDeadline` cross the MCP JSON boundary as decimal strings.
+function toPermit2Message(permit: Permit2Single) {
+  return {
+    details: {
+      token: permit.details.token,
+      amount: BigInt(permit.details.amount),
+      expiration: permit.details.expiration,
+      nonce: permit.details.nonce,
+    },
+    spender: permit.spender,
+    sigDeadline: BigInt(permit.sigDeadline),
+  };
+}
+
+/** Reads Permit2's stored allowance state for (owner, token, spender) — `nonce` feeds the next `PermitSingle`. */
+export async function getPermit2Allowance(
+  chainId: number,
+  owner: Address,
+  token: Address,
+  spender: Address,
+): Promise<{ amount: bigint; expiration: number; nonce: number }> {
+  const cfg = getChain(chainId);
+  const client = createPublicClient({ transport: http(cfg.rpcUrl) });
+  const [amount, expiration, nonce] = await client.readContract({
+    address: cfg.permit2,
+    abi: permit2Abi,
+    functionName: "allowance",
+    args: [owner, token, spender],
+  });
+  return { amount, expiration, nonce };
+}
+
+/** Builds a fresh, short-lived `PermitSingle` for `owner` to sign, plus its EIP-712 payload. */
+function buildPermit2TypedData(
+  chainId: number,
+  token: Address,
+  spender: Address,
+  amount: bigint,
+  nonce: number,
+): { permit: Permit2Single; typedData: Permit2TypedData } {
+  const now = Math.floor(Date.now() / 1000);
+  const permit: Permit2Single = {
+    details: {
+      token,
+      amount: amount.toString(),
+      expiration: now + PERMIT2_EXPIRATION_SECS,
+      nonce,
+    },
+    spender,
+    sigDeadline: now + PERMIT2_SIG_DEADLINE_SECS,
+  };
+  return {
+    permit,
+    typedData: {
+      domain: permit2Domain(chainId),
+      types: PERMIT2_TYPES,
+      primaryType: "PermitSingle",
+      message: permit,
+    },
+  };
+}
+
+export interface Permit2Requirement {
+  sufficient: boolean;
+  permit?: Permit2Single;
+  typedData?: Permit2TypedData;
+}
+
+/**
+ * Checks whether Permit2 already has a standing allowance covering `amount`
+ * of `token` for the chain's Universal Router; if not, returns a fresh
+ * `PermitSingle` + EIP-712 payload for `owner` to sign — feed the signature
+ * straight back into `buildSwapTx`'s `permit2`/`permit2Signature`.
+ */
+export async function checkPermit2Requirement(
+  chainId: number,
+  owner: Address,
+  token: Address,
+  amount: bigint,
+): Promise<Permit2Requirement> {
+  const cfg = getChain(chainId);
+  const { amount: allowed, expiration, nonce } = await getPermit2Allowance(
+    chainId,
+    owner,
+    token,
+    cfg.universalRouter,
+  );
+  const now = Math.floor(Date.now() / 1000);
+  if (allowed >= amount && expiration > now + PERMIT2_ALLOWANCE_SAFETY_MARGIN_SECS) {
+    return { sufficient: true };
+  }
+  const { permit, typedData } = buildPermit2TypedData(
+    chainId,
+    token,
+    cfg.universalRouter,
+    amount,
+    nonce,
+  );
+  return { sufficient: false, permit, typedData };
+}
+
+/** Verifies `signature` was produced by `owner` over `permit` — ecrecover for an EOA, falling back to ERC-1271 for a smart-contract wallet. */
+export async function verifyPermit2Signature(
+  chainId: number,
+  owner: Address,
+  permit: Permit2Single,
+  signature: Hex,
+): Promise<boolean> {
+  const cfg = getChain(chainId);
+  const client = createPublicClient({ transport: http(cfg.rpcUrl) });
+  return client.verifyTypedData({
+    address: owner,
+    domain: permit2Domain(chainId),
+    types: PERMIT2_TYPES,
+    primaryType: "PermitSingle",
+    message: toPermit2Message(permit),
+    signature,
+  });
+}
+
+/** Encodes the `(PermitSingle, bytes signature)` tuple `PERMIT2_PERMIT` expects. */
+function encodePermit2PermitInput(permit: Permit2Single, signature: Hex): Hex {
+  return encodeAbiParameters(
+    [
+      {
+        type: "tuple",
+        components: [
+          {
+            name: "details",
+            type: "tuple",
+            components: [
+              { name: "token", type: "address" },
+              { name: "amount", type: "uint160" },
+              { name: "expiration", type: "uint48" },
+              { name: "nonce", type: "uint48" },
+            ],
+          },
+          { name: "spender", type: "address" },
+          { name: "sigDeadline", type: "uint256" },
+        ],
+      },
+      { type: "bytes" },
+    ],
+    [toPermit2Message(permit), signature],
+  );
 }
 
 export interface WrapParams {
@@ -735,7 +942,8 @@ export interface SwapParams {
    * Wrap this much native ETH first (≥ amountInWei); the un-swapped remainder
    * is swept back to `recipient` as WETH. Requires `tokenIn` to be WETH9.
    * Omit when the wallet already holds `tokenIn` — that variant pays through
-   * Permit2, so the wallet needs a Permit2 approval for `tokenIn` rather than
+   * Permit2, so the wallet needs either a standing Permit2 allowance for
+   * `tokenIn` or a signed `permit2`/`permit2Signature` (see below) rather than
    * a plain ERC-20 approval to the router.
    */
   wrapWei?: bigint;
@@ -745,6 +953,18 @@ export interface SwapParams {
    * `wrapWei`.
    */
   unwrapOut?: boolean;
+  /**
+   * Embeds a signed Permit2 `PERMIT2_PERMIT` command before the swap command,
+   * so the Universal Router's Permit2 allowance is set AND consumed
+   * atomically in this tx — no standing on-chain allowance required. Get
+   * `permit`/`typedData` from `checkPermit2Requirement` (surfaced by
+   * `swapOp` as a `permit2Required` response when the allowance is
+   * insufficient), sign `typedData`, then pass the same `permit` back here
+   * verbatim together with the signature as `permit2Signature`. Mutually
+   * exclusive with `wrapWei` (that path pays via WRAP_ETH, not Permit2).
+   */
+  permit2?: Permit2Single;
+  permit2Signature?: Hex;
   deadline?: number; // unix seconds; default now + 20 min
 }
 
@@ -785,6 +1005,31 @@ export function buildSwapTx(params: SwapParams): UnsignedTx {
   if (params.unwrapOut && !isWeth9(params.tokenOut)) {
     throw new Error(`unwrapOut requires tokenOut to be WETH9 (${cfg.weth9})`);
   }
+  if ((params.permit2 === undefined) !== (params.permit2Signature === undefined)) {
+    throw new Error("permit2 and permit2Signature must be provided together");
+  }
+  if (params.permit2 !== undefined && params.wrapWei !== undefined) {
+    throw new Error(
+      "permit2 cannot be combined with wrapWei — that path pays via WRAP_ETH, not Permit2",
+    );
+  }
+  if (params.permit2 !== undefined) {
+    if (params.permit2.details.token.toLowerCase() !== params.tokenIn.toLowerCase()) {
+      throw new Error("permit2.details.token must match tokenIn");
+    }
+    if (params.permit2.spender.toLowerCase() !== cfg.universalRouter.toLowerCase()) {
+      throw new Error("permit2.spender must be this chain's Universal Router");
+    }
+    if (BigInt(params.permit2.details.amount) !== params.amountInWei) {
+      throw new Error("permit2.details.amount must equal amountInWei");
+    }
+  }
+
+  const permit2Command = params.permit2 !== undefined ? CMD_PERMIT2_PERMIT : "";
+  const permit2Inputs =
+    params.permit2 !== undefined
+      ? [encodePermit2PermitInput(params.permit2, params.permit2Signature as Hex)]
+      : [];
 
   if (params.unwrapOut) {
     const unwrapInput = encodeAbiParameters(
@@ -793,8 +1038,8 @@ export function buildSwapTx(params: SwapParams): UnsignedTx {
     );
     return urExecute(
       params.chainId,
-      `0x${CMD_V3_SWAP_EXACT_IN}${CMD_UNWRAP_WETH}`,
-      [swapInput(ADDRESS_THIS, true), unwrapInput],
+      `0x${permit2Command}${CMD_V3_SWAP_EXACT_IN}${CMD_UNWRAP_WETH}`,
+      [...permit2Inputs, swapInput(ADDRESS_THIS, true), unwrapInput],
       0n,
       params.deadline,
     );
@@ -803,8 +1048,8 @@ export function buildSwapTx(params: SwapParams): UnsignedTx {
   if (params.wrapWei === undefined) {
     return urExecute(
       params.chainId,
-      `0x${CMD_V3_SWAP_EXACT_IN}`,
-      [swapInput(recipient, true)],
+      `0x${permit2Command}${CMD_V3_SWAP_EXACT_IN}`,
+      [...permit2Inputs, swapInput(recipient, true)],
       0n,
       params.deadline,
     );

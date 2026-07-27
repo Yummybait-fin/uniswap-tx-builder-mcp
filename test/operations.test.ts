@@ -10,6 +10,7 @@ vi.mock("../src/builder.js", () => ({
   buildMintTx: vi.fn(),
   buildSwapTx: vi.fn(),
   buildWrapTx: vi.fn(),
+  checkPermit2Requirement: vi.fn(),
   decodeApproveResult: vi.fn(),
   decodeCollectResult: vi.fn(),
   decodeDecreaseLiquidityResult: vi.fn(),
@@ -22,6 +23,7 @@ vi.mock("../src/builder.js", () => ({
   planPosition: vi.fn(),
   simulateTx: vi.fn(),
   toUnsignedRlp: vi.fn(() => "0xr1p"),
+  verifyPermit2Signature: vi.fn(),
 }));
 
 import {
@@ -32,6 +34,7 @@ import {
   buildMintTx,
   buildSwapTx,
   buildWrapTx,
+  checkPermit2Requirement,
   decodeApproveResult,
   decodeCollectResult,
   decodeDecreaseLiquidityResult,
@@ -43,6 +46,7 @@ import {
   getSwapQuote,
   planPosition,
   simulateTx,
+  verifyPermit2Signature,
 } from "../src/builder.js";
 import {
   SimulationError,
@@ -400,6 +404,8 @@ describe("swapOp", () => {
     expect(res.description).toBe(
       `Universal Router: wrap 9 wei native ETH, swap 5 wei ${WETH9} → ${TOKEN0} (fee 3000), sweep WETH remainder`,
     );
+    // wrapWei doesn't pay through Permit2 — no allowance check needed.
+    expect(checkPermit2Requirement).not.toHaveBeenCalled();
   });
 
   it("describes an unwrap-out swap", async () => {
@@ -407,6 +413,79 @@ describe("swapOp", () => {
     expect(res.description).toBe(
       `Universal Router: swap 5 wei ${TOKEN0} → native ETH (fee 3000), unwrap WETH to native ETH`,
     );
+  });
+
+  // ── Permit2 auto-detect / signed-permit embedding ──────────────────
+
+  it("skips the Permit2 allowance check without a sender", async () => {
+    await swapOp(ARGS);
+    expect(checkPermit2Requirement).not.toHaveBeenCalled();
+    expect(buildSwapTx).toHaveBeenCalledWith(ARGS);
+  });
+
+  it("builds the tx normally when the standing Permit2 allowance is sufficient", async () => {
+    vi.mocked(checkPermit2Requirement).mockResolvedValueOnce({ sufficient: true });
+
+    const res = await swapOp({ ...ARGS, sender: RECIPIENT });
+
+    expect(checkPermit2Requirement).toHaveBeenCalledWith(1, RECIPIENT, WETH9, 5n);
+    expect(buildSwapTx).toHaveBeenCalled();
+    expect(res).toMatchObject({ tx: TX, description: expect.any(String) });
+  });
+
+  it("returns a permit2Required response instead of a tx when the allowance is insufficient", async () => {
+    const typedData = { domain: {}, types: {}, primaryType: "PermitSingle", message: {} };
+    const permit = { details: { token: WETH9, amount: "5", expiration: 1, nonce: 0 }, spender: RECIPIENT, sigDeadline: 1 };
+    vi.mocked(checkPermit2Requirement).mockResolvedValueOnce({
+      sufficient: false,
+      permit: permit as never,
+      typedData: typedData as never,
+    });
+
+    const res = await swapOp({ ...ARGS, sender: RECIPIENT });
+
+    expect(res).toEqual({
+      permit2Required: true,
+      typedData,
+      permit,
+      description: expect.stringContaining("No sufficient Permit2 allowance"),
+    });
+    expect(buildSwapTx).not.toHaveBeenCalled();
+  });
+
+  it("skips the allowance check and verifies the signature when a permit2 is already supplied", async () => {
+    const permit = { details: { token: WETH9, amount: "5", expiration: 1, nonce: 0 }, spender: RECIPIENT, sigDeadline: 1 };
+    vi.mocked(verifyPermit2Signature).mockResolvedValueOnce(true);
+
+    const res = await swapOp({
+      ...ARGS,
+      sender: RECIPIENT,
+      permit2: permit as never,
+      permit2Signature: "0xsig",
+    });
+
+    expect(checkPermit2Requirement).not.toHaveBeenCalled();
+    expect(verifyPermit2Signature).toHaveBeenCalledWith(1, RECIPIENT, permit, "0xsig");
+    expect(res.description).toContain("Permit2 permit embedded — no standing allowance required");
+  });
+
+  it("throws when the supplied permit2Signature doesn't match sender", async () => {
+    const permit = { details: { token: WETH9, amount: "5", expiration: 1, nonce: 0 }, spender: RECIPIENT, sigDeadline: 1 };
+    vi.mocked(verifyPermit2Signature).mockResolvedValueOnce(false);
+
+    await expect(
+      swapOp({ ...ARGS, sender: RECIPIENT, permit2: permit as never, permit2Signature: "0xsig" }),
+    ).rejects.toThrow("permit2Signature does not match permit2 for `sender`");
+    expect(buildSwapTx).not.toHaveBeenCalled();
+  });
+
+  it("skips signature verification when permit2 is supplied without a sender", async () => {
+    const permit = { details: { token: WETH9, amount: "5", expiration: 1, nonce: 0 }, spender: RECIPIENT, sigDeadline: 1 };
+
+    await swapOp({ ...ARGS, permit2: permit as never, permit2Signature: "0xsig" });
+
+    expect(verifyPermit2Signature).not.toHaveBeenCalled();
+    expect(buildSwapTx).toHaveBeenCalled();
   });
 });
 

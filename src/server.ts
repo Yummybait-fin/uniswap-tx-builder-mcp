@@ -6,9 +6,10 @@
 import { createRequire } from "node:module";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { type Address, maxUint256 } from "viem";
+import { type Address, type Hex, maxUint256 } from "viem";
 import { z } from "zod";
 
+import type { Permit2Single } from "./builder.js";
 import {
   approveOp,
   closeOp,
@@ -36,6 +37,20 @@ const addressSchema = z
   .regex(/^0x[a-fA-F0-9]{40}$/, "must be a 0x EVM address");
 // uint256 token ids / amounts exceed JS safe integers → accept decimal strings.
 const uintStringSchema = z.string().regex(/^\d+$/, "must be a decimal integer string");
+const hexSchema = z.string().regex(/^0x[a-fA-F0-9]*$/, "must be 0x-prefixed hex");
+
+// Echoed back verbatim from a prior build_swap's `permit2Required` response —
+// see checkPermit2Requirement in builder.ts for how it's produced.
+const permit2Schema = z.object({
+  details: z.object({
+    token: addressSchema,
+    amount: uintStringSchema,
+    expiration: z.number().int(),
+    nonce: z.number().int(),
+  }),
+  spender: addressSchema,
+  sigDeadline: z.number().int(),
+});
 
 // Single-source the version from package.json (resolves from src/ in dev and
 // dist/ once built — package.json sits one level up in both layouts).
@@ -396,15 +411,21 @@ export function buildServer(): McpServer {
       description:
         "Build an UNSIGNED tx that swaps `amountInWei` of `tokenIn` for `tokenOut` " +
         "(exact-in, single hop through the `fee` pool) via the Universal Router. By " +
-        "default `tokenIn` pays via Permit2 (needs a Permit2 approval). With `wrapWei` " +
+        "default `tokenIn` pays via Permit2. When `sender` is given and Permit2 has no " +
+        "sufficient standing allowance for the Universal Router, this returns " +
+        "{permit2Required: true, typedData, permit} instead of a tx — sign `typedData` " +
+        "with `sender`'s wallet (e.g. sign_typed_data), then call build_swap again with " +
+        "the same args plus permit2=<the returned \"permit\"> and permit2Signature=<the " +
+        "signature> to get the tx, with a PERMIT2_PERMIT command embedded ahead of the " +
+        "swap — no separate on-chain Permit2 approval tx ever needed. With `wrapWei` " +
         "(≥ amountInWei, requires tokenIn = WETH9) the tx is payable and wraps that much " +
         "native ETH first, swaps amountInWei of it, and sweeps the WETH remainder — use " +
-        "this when the wallet holds native ETH instead of WETH. With `unwrapOut` " +
-        "(requires tokenOut = WETH9) the swap output is unwrapped to native ETH before " +
-        "reaching `recipient` — use this to sell a token for ETH. `wrapWei` and " +
-        "`unwrapOut` are mutually exclusive. `recipient` defaults to the tx sender. " +
-        "Returns the tx plus unsigned rlp. Pass `sender` to eth_call-simulate before " +
-        "signing.",
+        "this when the wallet holds native ETH instead of WETH (mutually exclusive with " +
+        "Permit2 payment/`permit2`). With `unwrapOut` (requires tokenOut = WETH9) the " +
+        "swap output is unwrapped to native ETH before reaching `recipient` — use this to " +
+        "sell a token for ETH. `wrapWei` and `unwrapOut` are mutually exclusive. " +
+        "`recipient` defaults to the tx sender. Returns the tx plus unsigned rlp. Pass " +
+        "`sender` to eth_call-simulate before signing.",
       inputSchema: {
         chainId: z.number().int(),
         tokenIn: addressSchema,
@@ -415,6 +436,8 @@ export function buildServer(): McpServer {
         recipient: addressSchema.optional(),
         wrapWei: uintStringSchema.optional(),
         unwrapOut: z.boolean().optional(),
+        permit2: permit2Schema.optional(),
+        permit2Signature: hexSchema.optional(),
         sender: addressSchema.optional(),
         deadline: z.number().int().positive().optional(),
         simulate: z.boolean().optional(),
@@ -432,6 +455,8 @@ export function buildServer(): McpServer {
           recipient: args.recipient as Address | undefined,
           wrapWei: args.wrapWei === undefined ? undefined : BigInt(args.wrapWei),
           unwrapOut: args.unwrapOut,
+          permit2: args.permit2 as Permit2Single | undefined,
+          permit2Signature: args.permit2Signature as Hex | undefined,
           sender: args.sender as Address | undefined,
           deadline: args.deadline,
           simulate: args.simulate,
