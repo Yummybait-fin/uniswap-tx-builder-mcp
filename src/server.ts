@@ -94,8 +94,9 @@ export function buildServer(): McpServer {
       description:
         "Build an UNSIGNED tx that collects all uncollected fees from a Uniswap v3 " +
         "position to `recipient`. Returns tx={to,data,value,chainId} plus rlp (the " +
-        "unsigned EIP-1559 serialization for signing services). Set simulate=false " +
-        "to skip the eth_call dry-run (on by default).",
+        "unsigned EIP-1559 serialization for signing services). When simulated, " +
+        "simulationResult={amount0,amount1} — the actual amounts eth_call reports " +
+        "would be collected. Set simulate=false to skip the eth_call dry-run (on by default).",
       inputSchema: {
         chainId: z.number().int(),
         positionId: uintStringSchema,
@@ -121,8 +122,10 @@ export function buildServer(): McpServer {
       description:
         "Build an UNSIGNED tx that removes all liquidity and collects everything from a " +
         "Uniswap v3 position (multicalls when needed). Returns the tx (+ unsigned rlp) " +
-        "plus the read position. Set burn=true to also burn the now-empty NFT in the " +
-        "same multicall. Set simulate=false to skip the eth_call dry-run (on by default).",
+        "plus the read position. When simulated, simulationResult={decreaseLiquidity?: " +
+        "{amount0,amount1}, collect: {amount0,amount1}} decoded from the eth_call return " +
+        "data. Set burn=true to also burn the now-empty NFT in the same multicall. Set " +
+        "simulate=false to skip the eth_call dry-run (on by default).",
       inputSchema: {
         chainId: z.number().int(),
         positionId: uintStringSchema,
@@ -150,9 +153,10 @@ export function buildServer(): McpServer {
       description:
         "Build an UNSIGNED tx that mints a new Uniswap v3 position. Amounts are decimal " +
         "strings (wei) — compute them with get_pool_state (live ratio) right before " +
-        "minting, or stale prices revert the mint. Returns the tx plus unsigned rlp. " +
-        "Simulation is OFF by default here (minting needs token approvals and balances, " +
-        "so eth_call usually reverts); pass simulate=true to attempt it.",
+        "minting, or stale prices revert the mint. Returns the tx plus unsigned rlp. When " +
+        "simulated, simulationResult={tokenId,liquidity,amount0,amount1} decoded from the " +
+        "eth_call return data. Simulation is OFF by default here (minting needs token " +
+        "approvals and balances, so eth_call usually reverts); pass simulate=true to attempt it.",
       inputSchema: {
         chainId: z.number().int(),
         token0: addressSchema,
@@ -192,8 +196,9 @@ export function buildServer(): McpServer {
       description:
         "Build an UNSIGNED tx that adds liquidity to an EXISTING Uniswap v3 position. " +
         "Amounts are decimal strings (wei); mins are derived from slippageBps (default 0.5%). " +
-        "Returns the tx plus unsigned rlp. Simulation is OFF by default (needs token " +
-        "approvals + balances); pass simulate=true to attempt it.",
+        "Returns the tx plus unsigned rlp. When simulated, simulationResult=" +
+        "{liquidity,amount0,amount1} decoded from the eth_call return data. Simulation is " +
+        "OFF by default (needs token approvals + balances); pass simulate=true to attempt it.",
       inputSchema: {
         chainId: z.number().int(),
         positionId: uintStringSchema,
@@ -227,7 +232,8 @@ export function buildServer(): McpServer {
         "behalf of the wallet that signs it — e.g. the NonfungiblePositionManager before " +
         "build_mint/build_increase, or Permit2 before a Permit2-paid build_swap. Pass " +
         "amount=\"max\" for an unlimited (uint256 max) allowance. Returns the tx plus " +
-        "unsigned rlp. Pass `sender` (the signing wallet) to eth_call-simulate before signing.",
+        "unsigned rlp; when simulated, simulationResult={approved} decoded from the " +
+        "eth_call return data. Pass `sender` (the signing wallet) to eth_call-simulate before signing.",
       inputSchema: {
         chainId: z.number().int(),
         token: addressSchema,

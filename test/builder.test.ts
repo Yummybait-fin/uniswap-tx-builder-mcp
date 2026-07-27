@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { decodeFunctionData } from "viem";
+import { decodeFunctionData, encodeFunctionResult } from "viem";
 
 import { erc20Abi, nfpmAbi } from "../src/abi.js";
 
@@ -25,6 +25,12 @@ import {
   buildCollectTx,
   buildIncreaseLiquidityTx,
   buildMintTx,
+  decodeApproveResult,
+  decodeCollectResult,
+  decodeDecreaseLiquidityResult,
+  decodeIncreaseLiquidityResult,
+  decodeMintResult,
+  decodeMulticallResults,
   getPoolState,
   getPositionsByOwner,
   planPosition,
@@ -435,11 +441,11 @@ describe("planPosition", () => {
 // ── simulateTx ───────────────────────────────────────────────────────
 
 describe("simulateTx", () => {
-  it("resolves when eth_call succeeds", async () => {
+  it("resolves with the eth_call return data", async () => {
     const tx = await buildCollectTx(1, 1n, RECIPIENT);
-    mockCall.mockResolvedValueOnce({ data: "0x" });
+    mockCall.mockResolvedValueOnce({ data: "0xcafe" });
 
-    await expect(simulateTx(1, tx, RECIPIENT)).resolves.toBeUndefined();
+    await expect(simulateTx(1, tx, RECIPIENT)).resolves.toBe("0xcafe");
 
     expect(mockCall).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -451,6 +457,13 @@ describe("simulateTx", () => {
     );
   });
 
+  it("resolves with \"0x\" when the call has no return data", async () => {
+    const tx = await buildCollectTx(1, 1n, RECIPIENT);
+    mockCall.mockResolvedValueOnce({ data: undefined });
+
+    await expect(simulateTx(1, tx, RECIPIENT)).resolves.toBe("0x");
+  });
+
   it("throws when eth_call reverts", async () => {
     const tx = await buildCollectTx(1, 1n, RECIPIENT);
     mockCall.mockRejectedValueOnce(
@@ -460,6 +473,83 @@ describe("simulateTx", () => {
     await expect(simulateTx(1, tx, RECIPIENT)).rejects.toThrow(
       "Not approved",
     );
+  });
+});
+
+// ── decode*Result (turn eth_call return data into real amounts) ──────
+
+describe("decode simulation results", () => {
+  it("decodeCollectResult reads amount0/amount1", () => {
+    const data = encodeFunctionResult({
+      abi: nfpmAbi,
+      functionName: "collect",
+      result: [100n, 200n],
+    });
+    expect(decodeCollectResult(data)).toEqual({ amount0: "100", amount1: "200" });
+  });
+
+  it("decodeDecreaseLiquidityResult reads amount0/amount1", () => {
+    const data = encodeFunctionResult({
+      abi: nfpmAbi,
+      functionName: "decreaseLiquidity",
+      result: [11n, 22n],
+    });
+    expect(decodeDecreaseLiquidityResult(data)).toEqual({ amount0: "11", amount1: "22" });
+  });
+
+  it("decodeIncreaseLiquidityResult reads liquidity/amount0/amount1", () => {
+    const data = encodeFunctionResult({
+      abi: nfpmAbi,
+      functionName: "increaseLiquidity",
+      result: [500n, 11n, 22n],
+    });
+    expect(decodeIncreaseLiquidityResult(data)).toEqual({
+      liquidity: "500",
+      amount0: "11",
+      amount1: "22",
+    });
+  });
+
+  it("decodeMintResult reads tokenId/liquidity/amount0/amount1", () => {
+    const data = encodeFunctionResult({
+      abi: nfpmAbi,
+      functionName: "mint",
+      result: [42n, 500n, 11n, 22n],
+    });
+    expect(decodeMintResult(data)).toEqual({
+      tokenId: "42",
+      liquidity: "500",
+      amount0: "11",
+      amount1: "22",
+    });
+  });
+
+  it("decodeMulticallResults unwraps the per-call return data in order", () => {
+    const inner0 = encodeFunctionResult({
+      abi: nfpmAbi,
+      functionName: "decreaseLiquidity",
+      result: [11n, 22n],
+    });
+    const inner1 = encodeFunctionResult({
+      abi: nfpmAbi,
+      functionName: "collect",
+      result: [11n, 22n],
+    });
+    const data = encodeFunctionResult({
+      abi: nfpmAbi,
+      functionName: "multicall",
+      result: [inner0, inner1],
+    });
+    expect(decodeMulticallResults(data)).toEqual([inner0, inner1]);
+  });
+
+  it("decodeApproveResult reads the bool", () => {
+    const data = encodeFunctionResult({
+      abi: erc20Abi,
+      functionName: "approve",
+      result: true,
+    });
+    expect(decodeApproveResult(data)).toBe(true);
   });
 });
 

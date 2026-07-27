@@ -2,6 +2,7 @@ import {
   type Address,
   type Hex,
   createPublicClient,
+  decodeFunctionResult,
   encodeAbiParameters,
   encodeFunctionData,
   encodePacked,
@@ -300,20 +301,102 @@ export async function buildCloseTx(
 
 // ─── simulate (dry-run via eth_call) ─────────────────────────────────
 
+/** Dry-runs `tx` via `eth_call` and returns its raw return data (`"0x"` for calls with no outputs). */
 export async function simulateTx(
   chainId: number,
   tx: UnsignedTx,
   from: Address,
-): Promise<void> {
+): Promise<Hex> {
   const cfg = getChain(chainId);
   const client = createPublicClient({ transport: http(cfg.rpcUrl) });
 
-  await client.call({
+  const { data } = await client.call({
     account: from,
     to: tx.to,
     data: tx.data,
     value: BigInt(tx.value),
   });
+  return data ?? "0x";
+}
+
+// ─── decode simulation return data ───────────────────────────────────
+// Each decoder mirrors one NFPM/ERC-20 write function's `outputs`, turning the
+// raw `eth_call` return data `simulateTx` produces into the actual amounts a
+// caller wants to see (bigints as decimal strings, matching the rest of this
+// module's JSON-facing types).
+
+export interface CollectAmounts {
+  amount0: string;
+  amount1: string;
+}
+
+export function decodeCollectResult(data: Hex): CollectAmounts {
+  const [amount0, amount1] = decodeFunctionResult({
+    abi: nfpmAbi,
+    functionName: "collect",
+    data,
+  });
+  return { amount0: amount0.toString(), amount1: amount1.toString() };
+}
+
+export type DecreaseLiquidityAmounts = CollectAmounts;
+
+export function decodeDecreaseLiquidityResult(data: Hex): DecreaseLiquidityAmounts {
+  const [amount0, amount1] = decodeFunctionResult({
+    abi: nfpmAbi,
+    functionName: "decreaseLiquidity",
+    data,
+  });
+  return { amount0: amount0.toString(), amount1: amount1.toString() };
+}
+
+export interface IncreaseLiquidityAmounts {
+  liquidity: string;
+  amount0: string;
+  amount1: string;
+}
+
+export function decodeIncreaseLiquidityResult(data: Hex): IncreaseLiquidityAmounts {
+  const [liquidity, amount0, amount1] = decodeFunctionResult({
+    abi: nfpmAbi,
+    functionName: "increaseLiquidity",
+    data,
+  });
+  return {
+    liquidity: liquidity.toString(),
+    amount0: amount0.toString(),
+    amount1: amount1.toString(),
+  };
+}
+
+export interface MintCallResult {
+  tokenId: string;
+  liquidity: string;
+  amount0: string;
+  amount1: string;
+}
+
+export function decodeMintResult(data: Hex): MintCallResult {
+  const [tokenId, liquidity, amount0, amount1] = decodeFunctionResult({
+    abi: nfpmAbi,
+    functionName: "mint",
+    data,
+  });
+  return {
+    tokenId: tokenId.toString(),
+    liquidity: liquidity.toString(),
+    amount0: amount0.toString(),
+    amount1: amount1.toString(),
+  };
+}
+
+/** Unwraps a `multicall` return into its per-call raw return data, in call order. */
+export function decodeMulticallResults(data: Hex): readonly Hex[] {
+  return decodeFunctionResult({ abi: nfpmAbi, functionName: "multicall", data });
+}
+
+export function decodeApproveResult(data: Hex): boolean {
+  return decodeFunctionResult({ abi: erc20Abi, functionName: "approve", data });
 }
 
 // ─── mint (for rebalance step 2) ────────────────────────────────────

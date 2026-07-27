@@ -39,6 +39,15 @@ wallet MCP `send_transaction`). If your signer manages nonces itself, serialize 
   **wrap/swap/approve**, pass `sender` (the wallet that will sign) — simulation then runs by
   default with the correct `from` and `value`.
 - A simulation failure comes back as an error — **do not sign** a tx that failed to simulate.
+- A successful simulation also returns `simulationResult` — the **actual decoded return value**
+  of the call, not just `simulated: true`. Use it instead of guessing at expected amounts:
+  `build_collect` → `{amount0, amount1}`; `build_close` → `{decreaseLiquidity?: {amount0,
+  amount1}, collect: {amount0, amount1}}` (`decreaseLiquidity` only present when the position had
+  liquidity); `build_mint` → `{tokenId, liquidity, amount0, amount1}` (the real `tokenId` the mint
+  would get); `build_increase` → `{liquidity, amount0, amount1}`; `build_approve` →
+  `{approved}`. `build_wrap`/`build_swap` go through the Universal Router's `execute`, which has
+  no return value, so those two only ever report `simulated` (no `simulationResult`) — for an
+  expected swap output, quote separately rather than reading it off the simulation.
 - `recipient` on wrap/swap **defaults to the tx sender** (the router's `MSG_SENDER` placeholder).
   Omit it unless the output must go to a different address.
 
