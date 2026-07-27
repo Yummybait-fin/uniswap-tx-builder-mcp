@@ -12,6 +12,8 @@ import {
   type ApproveParams,
   type CollectAmounts,
   type OwnedPosition,
+  type Permit2Single,
+  type Permit2TypedData,
   type PlanPositionParams,
   type PlanPositionResult,
   type PoolStateParams,
@@ -28,6 +30,7 @@ import {
   buildMintTx,
   buildSwapTx,
   buildWrapTx,
+  checkPermit2Requirement,
   decodeApproveResult,
   decodeCollectResult,
   decodeDecreaseLiquidityResult,
@@ -40,6 +43,7 @@ import {
   planPosition,
   simulateTx,
   toUnsignedRlp,
+  verifyPermit2Signature,
 } from "./builder.js";
 
 /** Thrown when the opt-in `eth_call` dry-run reverts — never sign such a tx. */
@@ -336,7 +340,63 @@ export interface SwapArgs extends SwapParams {
   simulate?: boolean; // default: on when `sender` is provided
 }
 
-export async function swapOp(args: SwapArgs): Promise<TxResult> {
+/**
+ * Returned instead of a tx when the default (non-`wrapWei`) Permit2-paid path
+ * has no standing on-chain allowance covering the swap: sign `typedData` with
+ * `sender` (e.g. via a wallet's `sign_typed_data`), then call `build_swap`
+ * again with the same args plus `permit2: permit` and `permit2Signature` — no
+ * separate on-chain Permit2 approval tx needed.
+ */
+export interface Permit2SignRequest {
+  permit2Required: true;
+  typedData: Permit2TypedData;
+  permit: Permit2Single;
+  description: string;
+}
+
+export type SwapResult = TxResult | Permit2SignRequest;
+
+export async function swapOp(args: SwapArgs): Promise<SwapResult> {
+  // Only the default Permit2-paid path (no wrapWei) needs an allowance;
+  // skip auto-detection once a permit is already supplied or without a
+  // `sender` to check the allowance for.
+  if (args.wrapWei === undefined && args.permit2 === undefined && args.sender !== undefined) {
+    const requirement = await checkPermit2Requirement(
+      args.chainId,
+      args.sender,
+      args.tokenIn,
+      args.amountInWei,
+    );
+    if (!requirement.sufficient) {
+      return {
+        permit2Required: true,
+        typedData: requirement.typedData as Permit2TypedData,
+        permit: requirement.permit as Permit2Single,
+        description:
+          `No sufficient Permit2 allowance for the Universal Router to pull ` +
+          `${args.amountInWei} wei of ${args.tokenIn} from ${args.sender}. Sign ` +
+          `\`typedData\` with that wallet, then call build_swap again with the ` +
+          `same args plus permit2=<this "permit"> and permit2Signature=<the ` +
+          `signature> — no on-chain approval tx needed.`,
+      };
+    }
+  }
+
+  if (args.permit2 !== undefined && args.permit2Signature !== undefined && args.sender !== undefined) {
+    const valid = await verifyPermit2Signature(
+      args.chainId,
+      args.sender,
+      args.permit2,
+      args.permit2Signature,
+    );
+    if (!valid) {
+      throw new Error(
+        "permit2Signature does not match permit2 for `sender` — re-sign the exact " +
+          "typedData from the build_swap call that returned this permit.",
+      );
+    }
+  }
+
   const tx = buildSwapTx(args);
   const { simulated } = await maybeSimulateAsSender(
     args.chainId,
@@ -354,6 +414,9 @@ export async function swapOp(args: SwapArgs): Promise<TxResult> {
     description = `Universal Router: ${swap}, unwrap WETH to native ETH`;
   } else {
     description = `Universal Router: ${swap}`;
+  }
+  if (args.permit2 !== undefined) {
+    description += " (Permit2 permit embedded — no standing allowance required)";
   }
   return {
     tx,

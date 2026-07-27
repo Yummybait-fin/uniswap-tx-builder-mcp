@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { decodeFunctionData } from "viem";
+import { decodeAbiParameters, decodeFunctionData } from "viem";
 
 import { universalRouterAbi } from "../src/abi.js";
-import { buildSwapTx, buildWrapTx } from "../src/builder.js";
+import { type Permit2Single, buildSwapTx, buildWrapTx } from "../src/builder.js";
 
 const UR = "0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD";
 const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as const;
@@ -228,5 +228,171 @@ describe("buildWrapTx", () => {
     // WRAP_ETH custody goes to the router; swap output + sweep to the sender.
     expect(firstWord(swapInputs[0])).toBe(ADDRESS_THIS.slice(2).padStart(64, "0"));
     expect(firstWord(swapInputs[1])).toBe(MSG_SENDER.slice(2).padStart(64, "0"));
+  });
+});
+
+describe("buildSwapTx with a Permit2 permit embedded", () => {
+  const PERMIT2_PERMIT_PARAMS = [
+    {
+      type: "tuple",
+      components: [
+        {
+          name: "details",
+          type: "tuple",
+          components: [
+            { name: "token", type: "address" },
+            { name: "amount", type: "uint160" },
+            { name: "expiration", type: "uint48" },
+            { name: "nonce", type: "uint48" },
+          ],
+        },
+        { name: "spender", type: "address" },
+        { name: "sigDeadline", type: "uint256" },
+      ],
+    },
+    { type: "bytes" },
+  ] as const;
+
+  const PERMIT: Permit2Single = {
+    details: { token: WETH9_BASE, amount: "1000", expiration: 1783161774, nonce: 3 },
+    spender: UR,
+    sigDeadline: 1783161474,
+  };
+  const SIGNATURE = `0x${"ab".repeat(65)}` as const;
+
+  it("prepends PERMIT2_PERMIT before V3_SWAP_EXACT_IN in the plain swap path", () => {
+    const tx = buildSwapTx({
+      chainId: 8453,
+      tokenIn: WETH9_BASE,
+      amountInWei: 1000n,
+      tokenOut: USDC_BASE,
+      fee: 500,
+      amountOutMin: 1n,
+      permit2: PERMIT,
+      permit2Signature: SIGNATURE,
+      deadline: SWAP_DEADLINE,
+    });
+
+    const decoded = decodeFunctionData({ abi: universalRouterAbi, data: tx.data });
+    const [commands, inputs] = decoded.args;
+    expect(commands).toBe("0x0a00"); // PERMIT2_PERMIT then V3_SWAP_EXACT_IN
+    expect(inputs).toHaveLength(2);
+
+    const [permitStruct, signature] = decodeAbiParameters(PERMIT2_PERMIT_PARAMS, inputs[0]);
+    expect(permitStruct).toEqual({
+      details: { token: WETH9_BASE, amount: 1000n, expiration: 1783161774, nonce: 3 },
+      spender: UR,
+      sigDeadline: 1783161474n,
+    });
+    expect(signature).toBe(SIGNATURE);
+  });
+
+  it("prepends PERMIT2_PERMIT ahead of the swap+unwrap commands", () => {
+    const tx = buildSwapTx({
+      chainId: 8453,
+      tokenIn: USDC_BASE,
+      amountInWei: 1000n,
+      tokenOut: WETH9_BASE,
+      fee: 500,
+      amountOutMin: 1n,
+      permit2: { ...PERMIT, details: { ...PERMIT.details, token: USDC_BASE } },
+      permit2Signature: SIGNATURE,
+      unwrapOut: true,
+      deadline: SWAP_DEADLINE,
+    });
+
+    const decoded = decodeFunctionData({ abi: universalRouterAbi, data: tx.data });
+    const [commands, inputs] = decoded.args;
+    expect(commands).toBe("0x0a000c"); // PERMIT2_PERMIT, V3_SWAP_EXACT_IN, UNWRAP_WETH
+    expect(inputs).toHaveLength(3);
+  });
+
+  it("rejects permit2 combined with wrapWei", () => {
+    expect(() =>
+      buildSwapTx({
+        chainId: 8453,
+        tokenIn: WETH9_BASE,
+        amountInWei: 1000n,
+        tokenOut: USDC_BASE,
+        fee: 500,
+        amountOutMin: 1n,
+        wrapWei: 1000n,
+        permit2: PERMIT,
+        permit2Signature: SIGNATURE,
+      }),
+    ).toThrow("permit2 cannot be combined with wrapWei");
+  });
+
+  it("rejects permit2 without permit2Signature", () => {
+    expect(() =>
+      buildSwapTx({
+        chainId: 8453,
+        tokenIn: WETH9_BASE,
+        amountInWei: 1000n,
+        tokenOut: USDC_BASE,
+        fee: 500,
+        amountOutMin: 1n,
+        permit2: PERMIT,
+      }),
+    ).toThrow("permit2 and permit2Signature must be provided together");
+  });
+
+  it("rejects permit2Signature without permit2", () => {
+    expect(() =>
+      buildSwapTx({
+        chainId: 8453,
+        tokenIn: WETH9_BASE,
+        amountInWei: 1000n,
+        tokenOut: USDC_BASE,
+        fee: 500,
+        amountOutMin: 1n,
+        permit2Signature: SIGNATURE,
+      }),
+    ).toThrow("permit2 and permit2Signature must be provided together");
+  });
+
+  it("rejects a permit2 for the wrong token", () => {
+    expect(() =>
+      buildSwapTx({
+        chainId: 8453,
+        tokenIn: WETH9_BASE,
+        amountInWei: 1000n,
+        tokenOut: USDC_BASE,
+        fee: 500,
+        amountOutMin: 1n,
+        permit2: { ...PERMIT, details: { ...PERMIT.details, token: USDC_BASE } },
+        permit2Signature: SIGNATURE,
+      }),
+    ).toThrow("permit2.details.token must match tokenIn");
+  });
+
+  it("rejects a permit2 for the wrong spender", () => {
+    expect(() =>
+      buildSwapTx({
+        chainId: 8453,
+        tokenIn: WETH9_BASE,
+        amountInWei: 1000n,
+        tokenOut: USDC_BASE,
+        fee: 500,
+        amountOutMin: 1n,
+        permit2: { ...PERMIT, spender: USDC_BASE },
+        permit2Signature: SIGNATURE,
+      }),
+    ).toThrow("permit2.spender must be this chain's Universal Router");
+  });
+
+  it("rejects a permit2 for the wrong amount", () => {
+    expect(() =>
+      buildSwapTx({
+        chainId: 8453,
+        tokenIn: WETH9_BASE,
+        amountInWei: 1000n,
+        tokenOut: USDC_BASE,
+        fee: 500,
+        amountOutMin: 1n,
+        permit2: { ...PERMIT, details: { ...PERMIT.details, amount: "999" } },
+        permit2Signature: SIGNATURE,
+      }),
+    ).toThrow("permit2.details.amount must equal amountInWei");
   });
 });
