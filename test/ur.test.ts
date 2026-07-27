@@ -6,6 +6,7 @@ import { buildSwapTx, buildWrapTx } from "../src/builder.js";
 
 const UR = "0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD";
 const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as const;
+const WETH9_BASE = "0x4200000000000000000000000000000000000006" as const;
 const MSG_SENDER = "0x0000000000000000000000000000000000000001";
 const ADDRESS_THIS = "0x0000000000000000000000000000000000000002";
 
@@ -24,6 +25,7 @@ describe("buildSwapTx", () => {
   it("reproduces the live wrap+swap tx byte-for-byte", () => {
     const tx = buildSwapTx({
       chainId: 8453,
+      tokenIn: WETH9_BASE,
       amountInWei: 560000000000000n,
       tokenOut: USDC_BASE,
       fee: 500,
@@ -41,6 +43,7 @@ describe("buildSwapTx", () => {
   it("builds a plain Permit2-paid swap when wrapWei is omitted", () => {
     const tx = buildSwapTx({
       chainId: 8453,
+      tokenIn: WETH9_BASE,
       amountInWei: 1000n,
       tokenOut: USDC_BASE,
       fee: 500,
@@ -64,6 +67,7 @@ describe("buildSwapTx", () => {
     const recipient = "0x1234567890AbcdEF1234567890aBcdef12345678" as const;
     const tx = buildSwapTx({
       chainId: 8453,
+      tokenIn: WETH9_BASE,
       amountInWei: 1000n,
       tokenOut: USDC_BASE,
       fee: 500,
@@ -74,10 +78,27 @@ describe("buildSwapTx", () => {
     expect(tx.data.toLowerCase()).toContain(recipient.slice(2).toLowerCase());
   });
 
+  it("swaps an arbitrary ERC-20 pair with no WETH involved", () => {
+    const DAI_BASE = "0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb" as const;
+    const tx = buildSwapTx({
+      chainId: 8453,
+      tokenIn: DAI_BASE,
+      amountInWei: 1000n,
+      tokenOut: USDC_BASE,
+      fee: 500,
+      amountOutMin: 1n,
+      deadline: SWAP_DEADLINE,
+    });
+    expect(tx.value).toBe("0");
+    expect(tx.data.toLowerCase()).toContain(DAI_BASE.slice(2).toLowerCase());
+    expect(tx.data.toLowerCase()).toContain(USDC_BASE.slice(2).toLowerCase());
+  });
+
   it("rejects wrapWei below amountInWei", () => {
     expect(() =>
       buildSwapTx({
         chainId: 8453,
+        tokenIn: WETH9_BASE,
         amountInWei: 1000n,
         tokenOut: USDC_BASE,
         fee: 500,
@@ -85,6 +106,77 @@ describe("buildSwapTx", () => {
         wrapWei: 999n,
       }),
     ).toThrow("wrapWei");
+  });
+
+  it("rejects wrapWei when tokenIn isn't WETH9", () => {
+    expect(() =>
+      buildSwapTx({
+        chainId: 8453,
+        tokenIn: USDC_BASE,
+        amountInWei: 1000n,
+        tokenOut: WETH9_BASE,
+        fee: 500,
+        amountOutMin: 1n,
+        wrapWei: 1000n,
+      }),
+    ).toThrow("wrapWei requires tokenIn to be WETH9");
+  });
+
+  it("rejects unwrapOut when tokenOut isn't WETH9", () => {
+    expect(() =>
+      buildSwapTx({
+        chainId: 8453,
+        tokenIn: USDC_BASE,
+        amountInWei: 1000n,
+        tokenOut: USDC_BASE,
+        fee: 500,
+        amountOutMin: 1n,
+        unwrapOut: true,
+      }),
+    ).toThrow("unwrapOut requires tokenOut to be WETH9");
+  });
+
+  it("rejects wrapWei and unwrapOut together", () => {
+    expect(() =>
+      buildSwapTx({
+        chainId: 8453,
+        tokenIn: WETH9_BASE,
+        amountInWei: 1000n,
+        tokenOut: WETH9_BASE,
+        fee: 500,
+        amountOutMin: 1n,
+        wrapWei: 1000n,
+        unwrapOut: true,
+      }),
+    ).toThrow("wrapWei and unwrapOut cannot both be set");
+  });
+
+  it("routes unwrapOut through the router and unwraps to the recipient", () => {
+    const recipient = "0x1234567890AbcdEF1234567890aBcdef12345678" as const;
+    const tx = buildSwapTx({
+      chainId: 8453,
+      tokenIn: USDC_BASE,
+      amountInWei: 1000n,
+      tokenOut: WETH9_BASE,
+      fee: 500,
+      amountOutMin: 42n,
+      recipient,
+      unwrapOut: true,
+      deadline: SWAP_DEADLINE,
+    });
+    expect(tx.value).toBe("0");
+    const decoded = decodeFunctionData({ abi: universalRouterAbi, data: tx.data });
+    const [commands, inputs] = decoded.args;
+    expect(commands).toBe("0x000c"); // V3_SWAP_EXACT_IN then UNWRAP_WETH
+    expect(inputs).toHaveLength(2);
+    const firstWord = (input: string) => input.slice(2, 66);
+    // swap output recipient is the router itself, not the final recipient.
+    expect(firstWord(inputs[0])).toBe(ADDRESS_THIS.slice(2).padStart(64, "0"));
+    // UNWRAP_WETH: (address recipient, uint256 amountMinimum).
+    expect(inputs[1]).toBe(
+      `0x${recipient.slice(2).toLowerCase().padStart(64, "0")}` +
+        "000000000000000000000000000000000000000000000000000000000000002a",
+    );
   });
 });
 
@@ -121,6 +213,7 @@ describe("buildWrapTx", () => {
 
     const wrapSwap = buildSwapTx({
       chainId: 8453,
+      tokenIn: WETH9_BASE,
       amountInWei: 1n,
       tokenOut: USDC_BASE,
       fee: 500,

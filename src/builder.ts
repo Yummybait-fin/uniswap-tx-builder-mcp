@@ -585,6 +585,7 @@ export async function getPoolState(
 const CMD_V3_SWAP_EXACT_IN = "00";
 const CMD_SWEEP = "04";
 const CMD_WRAP_ETH = "0b";
+const CMD_UNWRAP_WETH = "0c";
 
 // UR recipient placeholder the router resolves to msg.sender at execution —
 // safer than a literal address when the output goes back to the signer.
@@ -640,35 +641,46 @@ export function buildWrapTx(params: WrapParams): UnsignedTx {
 
 export interface SwapParams {
   chainId: number;
+  tokenIn: Address;
   amountInWei: bigint;
   tokenOut: Address;
-  fee: number; // pool fee tier for the WETH9→tokenOut hop
+  fee: number; // pool fee tier for the tokenIn→tokenOut hop
   amountOutMin: bigint;
   recipient?: Address; // default: the tx sender (MSG_SENDER placeholder)
   /**
    * Wrap this much native ETH first (≥ amountInWei); the un-swapped remainder
-   * is swept back to `recipient` as WETH. Omit when the wallet already holds
-   * WETH — that variant pays through Permit2, so the wallet needs a Permit2
-   * approval for WETH9 rather than a plain ERC-20 approval to the router.
+   * is swept back to `recipient` as WETH. Requires `tokenIn` to be WETH9.
+   * Omit when the wallet already holds `tokenIn` — that variant pays through
+   * Permit2, so the wallet needs a Permit2 approval for `tokenIn` rather than
+   * a plain ERC-20 approval to the router.
    */
   wrapWei?: bigint;
+  /**
+   * Unwrap the swap output from WETH9 to native ETH before it reaches
+   * `recipient`. Requires `tokenOut` to be WETH9. Mutually exclusive with
+   * `wrapWei`.
+   */
+  unwrapOut?: boolean;
   deadline?: number; // unix seconds; default now + 20 min
 }
 
 /**
- * Exact-in single-hop v3 swap WETH9 → `tokenOut` via Universal Router.
+ * Exact-in single-hop v3 swap `tokenIn` → `tokenOut` via Universal Router.
  * With `wrapWei`: `WRAP_ETH(ADDRESS_THIS)` + `V3_SWAP_EXACT_IN(payerIsUser=
  * false)` + `SWEEP(WETH9, recipient, remainder)` in one payable tx — the
- * "wallet holds native ETH but the position needs WETH/ERC-20" path.
+ * "wallet holds native ETH but the position needs WETH/ERC-20" path. With
+ * `unwrapOut`: `V3_SWAP_EXACT_IN(recipient=router)` + `UNWRAP_WETH(recipient)`
+ * — the "position holds an ERC-20 but the wallet wants native ETH" path.
  */
 export function buildSwapTx(params: SwapParams): UnsignedTx {
   const cfg = getChain(params.chainId);
   const recipient = params.recipient ?? MSG_SENDER;
+  const isWeth9 = (addr: Address) => addr.toLowerCase() === cfg.weth9.toLowerCase();
   const path = encodePacked(
     ["address", "uint24", "address"],
-    [cfg.weth9, params.fee, params.tokenOut],
+    [params.tokenIn, params.fee, params.tokenOut],
   );
-  const swapInput = (payerIsUser: boolean) =>
+  const swapInput = (swapRecipient: Address, payerIsUser: boolean) =>
     encodeAbiParameters(
       [
         { type: "address" },
@@ -677,14 +689,38 @@ export function buildSwapTx(params: SwapParams): UnsignedTx {
         { type: "bytes" },
         { type: "bool" },
       ],
-      [recipient, params.amountInWei, params.amountOutMin, path, payerIsUser],
+      [swapRecipient, params.amountInWei, params.amountOutMin, path, payerIsUser],
     );
+
+  if (params.wrapWei !== undefined && params.unwrapOut) {
+    throw new Error("wrapWei and unwrapOut cannot both be set");
+  }
+  if (params.wrapWei !== undefined && !isWeth9(params.tokenIn)) {
+    throw new Error(`wrapWei requires tokenIn to be WETH9 (${cfg.weth9})`);
+  }
+  if (params.unwrapOut && !isWeth9(params.tokenOut)) {
+    throw new Error(`unwrapOut requires tokenOut to be WETH9 (${cfg.weth9})`);
+  }
+
+  if (params.unwrapOut) {
+    const unwrapInput = encodeAbiParameters(
+      [{ type: "address" }, { type: "uint256" }],
+      [recipient, params.amountOutMin],
+    );
+    return urExecute(
+      params.chainId,
+      `0x${CMD_V3_SWAP_EXACT_IN}${CMD_UNWRAP_WETH}`,
+      [swapInput(ADDRESS_THIS, true), unwrapInput],
+      0n,
+      params.deadline,
+    );
+  }
 
   if (params.wrapWei === undefined) {
     return urExecute(
       params.chainId,
       `0x${CMD_V3_SWAP_EXACT_IN}`,
-      [swapInput(true)],
+      [swapInput(recipient, true)],
       0n,
       params.deadline,
     );
@@ -706,7 +742,7 @@ export function buildSwapTx(params: SwapParams): UnsignedTx {
   return urExecute(
     params.chainId,
     `0x${CMD_WRAP_ETH}${CMD_V3_SWAP_EXACT_IN}${CMD_SWEEP}`,
-    [wrapInput, swapInput(false), sweepInput],
+    [wrapInput, swapInput(recipient, false), sweepInput],
     params.wrapWei,
     params.deadline,
   );
