@@ -6,19 +6,19 @@
     "url": "https://github.com/Yummybait-fin/uniswap-tx-builder-mcp",
     "source": "github"
   },
-  "version": "0.3.2",
+  "version": "0.4.1",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@yummybait/uniswap-tx-builder-mcp",
-      "version": "0.3.2",
+      "version": "0.4.1",
       "transport": {
         "type": "stdio"
       }
     },
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/yummybait-fin/uniswap-tx-builder-mcp:0.3.2",
+      "identifier": "ghcr.io/yummybait-fin/uniswap-tx-builder-mcp:0.4.1",
       "transport": {
         "type": "stdio"
       }
