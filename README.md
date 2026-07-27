@@ -52,8 +52,13 @@ to be configured either way (see [Configuration](#configuration) to override the
 `simulate` runs an opt-in `eth_call` dry-run: **on by default** for collect/close, **off** for
 mint/increase (those need approvals + balances, so the dry-run usually reverts); wrap/swap/approve
 simulate when you pass `sender` (the signing wallet). A reverted simulation comes back as an
-error — don't sign a tx that failed to simulate. See the companion skill for the full argument
-reference and position lifecycle.
+error — don't sign a tx that failed to simulate. When a dry-run succeeds, the response also
+includes `simulationResult` — the actual decoded return value of the call (e.g.
+`{amount0, amount1}` for `build_collect`/`build_close`, `{tokenId, liquidity, amount0, amount1}`
+for `build_mint`, `{approved}` for `build_approve`) rather than just the `simulated: true` flag.
+`build_wrap`/`build_swap` go through the Universal Router's `execute`, which has no return value,
+so they only report `simulated`. See the companion skill for the full argument reference and
+position lifecycle.
 
 ## Install & run
 

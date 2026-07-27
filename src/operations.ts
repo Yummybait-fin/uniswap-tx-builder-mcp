@@ -6,10 +6,11 @@
  * simulation throws {@link SimulationError} so a caller can distinguish a
  * reverted dry-run from a malformed request.
  */
-import { type Address, maxUint256 } from "viem";
+import { type Address, type Hex, maxUint256 } from "viem";
 
 import {
   type ApproveParams,
+  type CollectAmounts,
   type OwnedPosition,
   type PlanPositionParams,
   type PlanPositionResult,
@@ -25,6 +26,12 @@ import {
   buildMintTx,
   buildSwapTx,
   buildWrapTx,
+  decodeApproveResult,
+  decodeCollectResult,
+  decodeDecreaseLiquidityResult,
+  decodeIncreaseLiquidityResult,
+  decodeMintResult,
+  decodeMulticallResults,
   getPoolState,
   getPositionsByOwner,
   planPosition,
@@ -45,22 +52,31 @@ export interface TxResult {
   /** Unsigned EIP-1559 serialization of `tx` (nonce/fees/gas zeroed). */
   rlp: string;
   simulated: boolean;
+  /** Decoded `eth_call` return value, when `simulated` and the call has one. */
+  simulationResult?: unknown;
   description: string;
 }
 
-async function maybeSimulate(
+interface SimOutcome<T> {
+  simulated: boolean;
+  simulationResult?: T;
+}
+
+async function maybeSimulate<T>(
   chainId: number,
   tx: UnsignedTx,
   from: Address,
   simulate: boolean,
-): Promise<boolean> {
-  if (!simulate) return false;
+  decode: (data: Hex) => T,
+): Promise<SimOutcome<T>> {
+  if (!simulate) return { simulated: false };
+  let data: Hex;
   try {
-    await simulateTx(chainId, tx, from);
+    data = await simulateTx(chainId, tx, from);
   } catch (err) {
     throw new SimulationError(err instanceof Error ? err.message : String(err));
   }
-  return true;
+  return { simulated: true, simulationResult: decode(data) };
 }
 
 export interface CollectArgs {
@@ -72,16 +88,18 @@ export interface CollectArgs {
 
 export async function collectOp(args: CollectArgs): Promise<TxResult> {
   const tx = await buildCollectTx(args.chainId, args.positionId, args.recipient);
-  const simulated = await maybeSimulate(
+  const { simulated, simulationResult } = await maybeSimulate(
     args.chainId,
     tx,
     args.recipient,
     args.simulate !== false,
+    decodeCollectResult,
   );
   return {
     tx,
     rlp: toUnsignedRlp(tx),
     simulated,
+    simulationResult,
     description: `Collect fees from position #${args.positionId}`,
   };
 }
@@ -105,6 +123,34 @@ export interface CloseResult extends TxResult {
   };
 }
 
+export interface CloseCallResult {
+  decreaseLiquidity?: CollectAmounts;
+  collect: CollectAmounts;
+}
+
+/**
+ * `buildCloseTx` sends `collect` directly when it's the only call, otherwise
+ * wraps `[decreaseLiquidity?, collect]` in a `multicall` — decoding has to
+ * mirror that same shape to line results up with the calls that produced them.
+ */
+function decodeCloseResult(
+  data: Hex,
+  hadDecrease: boolean,
+  hadBurn: boolean,
+): CloseCallResult {
+  if (!hadDecrease && !hadBurn) {
+    return { collect: decodeCollectResult(data) };
+  }
+  const results = decodeMulticallResults(data);
+  if (!hadDecrease) {
+    return { collect: decodeCollectResult(results[0]) };
+  }
+  return {
+    decreaseLiquidity: decodeDecreaseLiquidityResult(results[0]),
+    collect: decodeCollectResult(results[1]),
+  };
+}
+
 export async function closeOp(args: CloseArgs): Promise<CloseResult> {
   const { tx, position } = await buildCloseTx(
     args.chainId,
@@ -112,11 +158,14 @@ export async function closeOp(args: CloseArgs): Promise<CloseResult> {
     args.recipient,
     args.burn ?? false,
   );
-  const simulated = await maybeSimulate(
+  const hadDecrease = position.liquidity > 0n;
+  const hadBurn = args.burn ?? false;
+  const { simulated, simulationResult } = await maybeSimulate(
     args.chainId,
     tx,
     args.recipient,
     args.simulate !== false,
+    (data) => decodeCloseResult(data, hadDecrease, hadBurn),
   );
 
   const action = position.liquidity > 0n
@@ -128,6 +177,7 @@ export async function closeOp(args: CloseArgs): Promise<CloseResult> {
     tx,
     rlp: toUnsignedRlp(tx),
     simulated,
+    simulationResult,
     position: {
       token0: position.token0,
       token1: position.token1,
@@ -156,16 +206,18 @@ export interface MintArgs {
 
 export async function mintOp(args: MintArgs): Promise<TxResult> {
   const tx = buildMintTx(args);
-  const simulated = await maybeSimulate(
+  const { simulated, simulationResult } = await maybeSimulate(
     args.chainId,
     tx,
     args.recipient,
     args.simulate === true,
+    decodeMintResult,
   );
   return {
     tx,
     rlp: toUnsignedRlp(tx),
     simulated,
+    simulationResult,
     description: `Mint new position: ${args.token0}/${args.token1} fee=${args.fee} range=[${args.tickLower}, ${args.tickUpper}]`,
   };
 }
@@ -182,16 +234,18 @@ export interface IncreaseArgs {
 
 export async function increaseOp(args: IncreaseArgs): Promise<TxResult> {
   const tx = buildIncreaseLiquidityTx(args);
-  const simulated = await maybeSimulate(
+  const { simulated, simulationResult } = await maybeSimulate(
     args.chainId,
     tx,
     args.recipient,
     args.simulate === true,
+    decodeIncreaseLiquidityResult,
   );
   return {
     tx,
     rlp: toUnsignedRlp(tx),
     simulated,
+    simulationResult,
     description: `Increase liquidity of position #${args.positionId}`,
   };
 }
@@ -226,19 +280,20 @@ export async function positionsOp(args: PositionsArgs): Promise<PositionsResult>
 // Wrap/swap txs are payable and spend the sender's native ETH, so simulation
 // needs the actual signer as `from` — `sender` opts it in (unlike collect/
 // close, where `recipient` doubles as a plausible `from`).
-async function maybeSimulateAsSender(
+async function maybeSimulateAsSender<T>(
   chainId: number,
   tx: UnsignedTx,
   sender: Address | undefined,
   simulate: boolean | undefined,
-): Promise<boolean> {
+  decode: (data: Hex) => T,
+): Promise<SimOutcome<T>> {
   if (!sender) {
     if (simulate === true) {
       throw new Error("simulate: true requires `sender` (the wallet that will sign)");
     }
-    return false;
+    return { simulated: false };
   }
-  return maybeSimulate(chainId, tx, sender, simulate !== false);
+  return maybeSimulate(chainId, tx, sender, simulate !== false, decode);
 }
 
 export interface WrapArgs extends WrapParams {
@@ -246,13 +301,18 @@ export interface WrapArgs extends WrapParams {
   simulate?: boolean; // default: on when `sender` is provided
 }
 
+// Universal Router's `execute` has no outputs — nothing to decode from a
+// wrap/swap dry-run beyond whether it reverted.
+const noDecode = () => undefined;
+
 export async function wrapOp(args: WrapArgs): Promise<TxResult> {
   const tx = buildWrapTx(args);
-  const simulated = await maybeSimulateAsSender(
+  const { simulated } = await maybeSimulateAsSender(
     args.chainId,
     tx,
     args.sender,
     args.simulate,
+    noDecode,
   );
   return {
     tx,
@@ -269,11 +329,12 @@ export interface SwapArgs extends SwapParams {
 
 export async function swapOp(args: SwapArgs): Promise<TxResult> {
   const tx = buildSwapTx(args);
-  const simulated = await maybeSimulateAsSender(
+  const { simulated } = await maybeSimulateAsSender(
     args.chainId,
     tx,
     args.sender,
     args.simulate,
+    noDecode,
   );
   const swapOut = args.unwrapOut ? "native ETH" : args.tokenOut;
   const swap = `swap ${args.amountInWei} wei ${args.tokenIn} → ${swapOut} (fee ${args.fee})`;
@@ -300,17 +361,19 @@ export interface ApproveArgs extends ApproveParams {
 
 export async function approveOp(args: ApproveArgs): Promise<TxResult> {
   const tx = buildApproveTx(args);
-  const simulated = await maybeSimulateAsSender(
+  const { simulated, simulationResult } = await maybeSimulateAsSender(
     args.chainId,
     tx,
     args.sender,
     args.simulate,
+    (data) => ({ approved: decodeApproveResult(data) }),
   );
   const amount = args.amount === maxUint256 ? "unlimited" : `${args.amount} wei`;
   return {
     tx,
     rlp: toUnsignedRlp(tx),
     simulated,
+    simulationResult,
     description: `Approve ${args.spender} to spend ${amount} of ${args.token}`,
   };
 }

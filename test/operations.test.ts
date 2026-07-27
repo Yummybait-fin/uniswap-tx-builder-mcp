@@ -10,6 +10,12 @@ vi.mock("../src/builder.js", () => ({
   buildMintTx: vi.fn(),
   buildSwapTx: vi.fn(),
   buildWrapTx: vi.fn(),
+  decodeApproveResult: vi.fn(),
+  decodeCollectResult: vi.fn(),
+  decodeDecreaseLiquidityResult: vi.fn(),
+  decodeIncreaseLiquidityResult: vi.fn(),
+  decodeMintResult: vi.fn(),
+  decodeMulticallResults: vi.fn(),
   getPoolState: vi.fn(),
   getPositionsByOwner: vi.fn(),
   planPosition: vi.fn(),
@@ -25,6 +31,12 @@ import {
   buildMintTx,
   buildSwapTx,
   buildWrapTx,
+  decodeApproveResult,
+  decodeCollectResult,
+  decodeDecreaseLiquidityResult,
+  decodeIncreaseLiquidityResult,
+  decodeMintResult,
+  decodeMulticallResults,
   getPoolState,
   getPositionsByOwner,
   planPosition,
@@ -49,6 +61,13 @@ const TOKEN0 = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as const;
 const TOKEN1 = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" as const;
 const TX = { to: RECIPIENT, data: "0xdeadbeef", value: "0", chainId: 1 };
 
+const RETURN_DATA = "0xcafe" as const;
+const COLLECT_RESULT = { amount0: "1", amount1: "2" };
+const DECREASE_RESULT = { amount0: "3", amount1: "4" };
+const INCREASE_RESULT = { liquidity: "5", amount0: "1", amount1: "2" };
+const MINT_RESULT = { tokenId: "9", liquidity: "5", amount0: "1", amount1: "2" };
+const MULTICALL_RESULTS = ["0xaaaa", "0xbbbb"] as const;
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(buildCollectTx).mockResolvedValue(TX);
@@ -57,6 +76,13 @@ beforeEach(() => {
   vi.mocked(buildWrapTx).mockReturnValue(TX);
   vi.mocked(buildSwapTx).mockReturnValue(TX);
   vi.mocked(buildApproveTx).mockReturnValue(TX);
+  vi.mocked(simulateTx).mockResolvedValue(RETURN_DATA);
+  vi.mocked(decodeCollectResult).mockReturnValue(COLLECT_RESULT);
+  vi.mocked(decodeDecreaseLiquidityResult).mockReturnValue(DECREASE_RESULT);
+  vi.mocked(decodeIncreaseLiquidityResult).mockReturnValue(INCREASE_RESULT);
+  vi.mocked(decodeMintResult).mockReturnValue(MINT_RESULT);
+  vi.mocked(decodeMulticallResults).mockReturnValue(MULTICALL_RESULTS);
+  vi.mocked(decodeApproveResult).mockReturnValue(true);
 });
 
 // ── collectOp ────────────────────────────────────────────────────────
@@ -64,14 +90,16 @@ beforeEach(() => {
 describe("collectOp", () => {
   const ARGS = { chainId: 1, positionId: 42n, recipient: RECIPIENT };
 
-  it("simulates by default and returns the tx + rlp", async () => {
+  it("simulates by default and returns the tx + rlp + decoded amounts", async () => {
     const res = await collectOp(ARGS);
 
     expect(simulateTx).toHaveBeenCalledWith(1, TX, RECIPIENT);
+    expect(decodeCollectResult).toHaveBeenCalledWith(RETURN_DATA);
     expect(res).toEqual({
       tx: TX,
       rlp: "0xr1p",
       simulated: true,
+      simulationResult: COLLECT_RESULT,
       description: "Collect fees from position #42",
     });
   });
@@ -123,6 +151,30 @@ describe("closeOp", () => {
     expect(res.description).toBe("Close position #7");
   });
 
+  it("decodes decreaseLiquidity + collect from the multicall when liquidity > 0", async () => {
+    const res = await closeOp(ARGS);
+
+    expect(decodeMulticallResults).toHaveBeenCalledWith(RETURN_DATA);
+    expect(decodeDecreaseLiquidityResult).toHaveBeenCalledWith(MULTICALL_RESULTS[0]);
+    expect(decodeCollectResult).toHaveBeenCalledWith(MULTICALL_RESULTS[1]);
+    expect(res.simulationResult).toEqual({
+      decreaseLiquidity: DECREASE_RESULT,
+      collect: COLLECT_RESULT,
+    });
+  });
+
+  it("decodes a bare collect when there's nothing to decrease or burn", async () => {
+    vi.mocked(buildCloseTx).mockResolvedValue({
+      tx: TX,
+      position: { ...POSITION, liquidity: 0n },
+    });
+    const res = await closeOp(ARGS);
+
+    expect(decodeMulticallResults).not.toHaveBeenCalled();
+    expect(decodeCollectResult).toHaveBeenCalledWith(RETURN_DATA);
+    expect(res.simulationResult).toEqual({ collect: COLLECT_RESULT });
+  });
+
   it("describes a liquidity-less close as a collect and appends the burn suffix", async () => {
     vi.mocked(buildCloseTx).mockResolvedValue({
       tx: TX,
@@ -134,6 +186,10 @@ describe("closeOp", () => {
     expect(res.description).toBe(
       "Collect remaining tokens from position #7 + burn NFT",
     );
+    // burn is folded into the multicall, so decoding still goes through it
+    // even though there's no liquidity to decrease.
+    expect(decodeMulticallResults).toHaveBeenCalledWith(RETURN_DATA);
+    expect(res.simulationResult).toEqual({ collect: COLLECT_RESULT });
   });
 });
 
@@ -160,10 +216,12 @@ describe("mintOp", () => {
     expect(res.description).toContain("[-60, 60]");
   });
 
-  it("simulates when asked", async () => {
+  it("simulates when asked and decodes the minted amounts", async () => {
     const res = await mintOp({ ...ARGS, simulate: true });
     expect(simulateTx).toHaveBeenCalledWith(1, TX, RECIPIENT);
+    expect(decodeMintResult).toHaveBeenCalledWith(RETURN_DATA);
     expect(res.simulated).toBe(true);
+    expect(res.simulationResult).toEqual(MINT_RESULT);
   });
 });
 
@@ -183,10 +241,12 @@ describe("increaseOp", () => {
     expect(res.description).toBe("Increase liquidity of position #9");
   });
 
-  it("simulates when asked", async () => {
+  it("simulates when asked and decodes the increased amounts", async () => {
     const res = await increaseOp({ ...ARGS, simulate: true });
     expect(simulateTx).toHaveBeenCalledWith(1, TX, RECIPIENT);
+    expect(decodeIncreaseLiquidityResult).toHaveBeenCalledWith(RETURN_DATA);
     expect(res.simulated).toBe(true);
+    expect(res.simulationResult).toEqual(INCREASE_RESULT);
   });
 });
 
@@ -261,10 +321,12 @@ describe("approveOp", () => {
     );
   });
 
-  it("simulates as the sender by default when one is given", async () => {
+  it("simulates as the sender by default when one is given and decodes the approval outcome", async () => {
     const res = await approveOp({ ...ARGS, sender: RECIPIENT });
     expect(simulateTx).toHaveBeenCalledWith(1, TX, RECIPIENT);
+    expect(decodeApproveResult).toHaveBeenCalledWith(RETURN_DATA);
     expect(res.simulated).toBe(true);
+    expect(res.simulationResult).toEqual({ approved: true });
   });
 
   it("describes a max allowance as unlimited", async () => {
