@@ -16,6 +16,7 @@ import {
   factoryAbi,
   nfpmAbi,
   poolAbi,
+  quoterV2Abi,
   universalRouterAbi,
 } from "./abi.js";
 import { getChain } from "./config.js";
@@ -829,4 +830,61 @@ export function buildSwapTx(params: SwapParams): UnsignedTx {
     params.wrapWei,
     params.deadline,
   );
+}
+
+// ─── QuoterV2 (off-chain swap quoting, no tx) ────────────────────────
+
+export interface QuoteSwapParams {
+  chainId: number;
+  tokenIn: Address;
+  tokenOut: Address;
+  amountInWei: bigint;
+  fee: number; // pool fee tier for the tokenIn→tokenOut hop
+  slippageBps?: number;
+}
+
+export interface QuoteSwapResult {
+  amountOut: string; // wei, as reported by the pool at its current price
+  amountOutMin: string; // amountOut after slippageBps (default 0.5%) — feeds build_swap
+  sqrtPriceX96After: string;
+  initializedTicksCrossed: number;
+  gasEstimate: string;
+}
+
+/**
+ * Quote an exact-in single-hop `tokenIn` → `tokenOut` swap via QuoterV2 —
+ * the live price a `build_swap` with the same params would execute at,
+ * without sending a tx. Call this right before `build_swap` and feed
+ * `amountOutMin` straight in; a quote read even a block earlier can be stale
+ * enough to make that `amountOutMin` revert the swap.
+ */
+export async function getSwapQuote(
+  params: QuoteSwapParams,
+): Promise<QuoteSwapResult> {
+  const cfg = getChain(params.chainId);
+  const client = createPublicClient({ transport: http(cfg.rpcUrl) });
+
+  const [amountOut, sqrtPriceX96After, initializedTicksCrossed, gasEstimate] =
+    await client.readContract({
+      address: cfg.quoterV2,
+      abi: quoterV2Abi,
+      functionName: "quoteExactInputSingle",
+      args: [
+        {
+          tokenIn: params.tokenIn,
+          tokenOut: params.tokenOut,
+          amountIn: params.amountInWei,
+          fee: params.fee,
+          sqrtPriceLimitX96: 0n,
+        },
+      ],
+    });
+
+  return {
+    amountOut: amountOut.toString(),
+    amountOutMin: minWithSlippage(amountOut, params.slippageBps).toString(),
+    sqrtPriceX96After: sqrtPriceX96After.toString(),
+    initializedTicksCrossed,
+    gasEstimate: gasEstimate.toString(),
+  };
 }

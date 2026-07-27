@@ -33,6 +33,7 @@ import {
   decodeMulticallResults,
   getPoolState,
   getPositionsByOwner,
+  getSwapQuote,
   planPosition,
   simulateTx,
 } from "../src/builder.js";
@@ -435,6 +436,86 @@ describe("planPosition", () => {
         priceUpper: 2,
       }),
     ).rejects.toThrow("token0 must be < token1");
+  });
+});
+
+// ── getSwapQuote ─────────────────────────────────────────────────────
+
+describe("getSwapQuote", () => {
+  beforeEach(() => {
+    mockReadContract.mockClear();
+  });
+
+  it("quotes via QuoterV2 and applies default 0.5% slippage", async () => {
+    mockReadContract.mockResolvedValueOnce([
+      1_000_000n, // amountOut
+      12345n, // sqrtPriceX96After
+      2, // initializedTicksCrossed
+      90_000n, // gasEstimate
+    ]);
+
+    const quote = await getSwapQuote({
+      chainId: 1,
+      tokenIn: TOKEN1,
+      tokenOut: TOKEN0,
+      amountInWei: 5_000_000n,
+      fee: 3000,
+    });
+
+    expect(mockReadContract).toHaveBeenCalledWith(
+      expect.objectContaining({
+        address: "0x61fFE014bA17989E743c5F6cB21bF9697530B21e",
+        functionName: "quoteExactInputSingle",
+        args: [
+          expect.objectContaining({
+            tokenIn: TOKEN1,
+            tokenOut: TOKEN0,
+            amountIn: 5_000_000n,
+            fee: 3000,
+            sqrtPriceLimitX96: 0n,
+          }),
+        ],
+      }),
+    );
+    expect(quote).toEqual({
+      amountOut: "1000000",
+      amountOutMin: "995000", // 1_000_000 - 0.5%
+      sqrtPriceX96After: "12345",
+      initializedTicksCrossed: 2,
+      gasEstimate: "90000",
+    });
+  });
+
+  it("applies custom slippage and the Base QuoterV2 address", async () => {
+    mockReadContract.mockResolvedValueOnce([1_000_000n, 12345n, 1, 90_000n]);
+
+    const quote = await getSwapQuote({
+      chainId: 8453,
+      tokenIn: TOKEN1,
+      tokenOut: TOKEN0,
+      amountInWei: 5_000_000n,
+      fee: 500,
+      slippageBps: 100,
+    });
+
+    expect(mockReadContract).toHaveBeenCalledWith(
+      expect.objectContaining({
+        address: "0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a",
+      }),
+    );
+    expect(quote.amountOutMin).toBe("990000"); // 1% off
+  });
+
+  it("rejects unsupported chain", async () => {
+    await expect(
+      getSwapQuote({
+        chainId: 999,
+        tokenIn: TOKEN1,
+        tokenOut: TOKEN0,
+        amountInWei: 1n,
+        fee: 3000,
+      }),
+    ).rejects.toThrow("Unsupported chain");
   });
 });
 

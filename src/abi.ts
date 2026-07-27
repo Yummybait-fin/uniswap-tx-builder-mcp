@@ -222,6 +222,40 @@ export const poolAbi = [
   },
 ] as const;
 
+/**
+ * QuoterV2 — off-chain swap quoting via `eth_call` (never send a tx to it).
+ * Upstream this is `nonpayable`, not `view` — it swaps against a pool and
+ * lets the callback revert with the encoded result rather than mutating
+ * state — but a plain `eth_call` still returns cleanly, so it's declared
+ * `view` here to let `readContract` type it as a read.
+ */
+export const quoterV2Abi = [
+  {
+    name: "quoteExactInputSingle",
+    type: "function",
+    stateMutability: "view",
+    inputs: [
+      {
+        name: "params",
+        type: "tuple",
+        components: [
+          { name: "tokenIn", type: "address" },
+          { name: "tokenOut", type: "address" },
+          { name: "amountIn", type: "uint256" },
+          { name: "fee", type: "uint24" },
+          { name: "sqrtPriceLimitX96", type: "uint160" },
+        ],
+      },
+    ],
+    outputs: [
+      { name: "amountOut", type: "uint256" },
+      { name: "sqrtPriceX96After", type: "uint160" },
+      { name: "initializedTicksCrossed", type: "uint32" },
+      { name: "gasEstimate", type: "uint256" },
+    ],
+  },
+] as const;
+
 /** Universal Router — only `execute`, for wrap/swap calldata. */
 export const universalRouterAbi = [
   {
