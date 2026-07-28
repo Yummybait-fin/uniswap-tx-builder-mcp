@@ -113,7 +113,7 @@ ERC-20 approval to the NonfungiblePositionManager** beforehand — build that ap
 approval in place already.) A Permit2-paid `build_swap` (no `wrapWei`, the default payment path
 for any `tokenIn`) needs Permit2 to have an allowance for the Universal Router — either a
 standing one, built the same way (`build_approve` with `spender` = Permit2,
-`0x000000000022D473030F116dDEE9F6B43aC78BA` on every EVM chain, **followed by an on-chain Permit2
+`0x000000000022D473030F116dDEE9F6B43aC78BA3` on every EVM chain, **followed by an on-chain Permit2
 approval** — a wallet-policy carve-out many setups don't have), **or** the signed-permit flow in
 [Permit2 payment](#permit2-payment-build_swap) above, which needs only a `sign_typed_data`
 capability scoped to the Permit2 contract and no separate on-chain approval tx at all — prefer

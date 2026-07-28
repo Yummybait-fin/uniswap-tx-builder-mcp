@@ -34,7 +34,7 @@ const CANONICAL_QUOTER_V2: Address =
   "0x61fFE014bA17989E743c5F6cB21bF9697530B21e";
 // Same CREATE2 address on every chain, including Base.
 const CANONICAL_PERMIT2: Address =
-  "0x000000000022D473030F116dDEE9F6B43aC78BA";
+  "0x000000000022D473030F116dDEE9F6B43aC78BA3";
 
 const chains: Record<number, ChainConfig> = {
   1: {

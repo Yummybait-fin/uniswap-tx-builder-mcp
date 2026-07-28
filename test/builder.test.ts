@@ -740,7 +740,7 @@ describe("getPoolState", () => {
 
 describe("getPermit2Allowance", () => {
   const UR = "0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD";
-  const PERMIT2 = "0x000000000022D473030F116dDEE9F6B43aC78BA";
+  const PERMIT2 = "0x000000000022D473030F116dDEE9F6B43aC78BA3";
 
   beforeEach(() => {
     mockReadContract.mockClear();
@@ -795,7 +795,7 @@ describe("checkPermit2Requirement", () => {
       domain: {
         name: "Permit2",
         chainId: 1,
-        verifyingContract: "0x000000000022D473030F116dDEE9F6B43aC78BA",
+        verifyingContract: "0x000000000022D473030F116dDEE9F6B43aC78BA3",
       },
       types: expect.objectContaining({ PermitSingle: expect.any(Array) }),
       primaryType: "PermitSingle",
@@ -837,7 +837,7 @@ describe("verifyPermit2Signature", () => {
       domain: {
         name: "Permit2",
         chainId: 1,
-        verifyingContract: "0x000000000022D473030F116dDEE9F6B43aC78BA",
+        verifyingContract: "0x000000000022D473030F116dDEE9F6B43aC78BA3",
       },
       types: expect.objectContaining({ PermitSingle: expect.any(Array) }),
       primaryType: "PermitSingle",
