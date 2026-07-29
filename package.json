@@ -53,7 +53,7 @@
     "prepublishOnly": "npm run typecheck && npm test && npm run verify:pack"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.29.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "viem": "^2.31.3",
     "zod": "4.4.3"
   },
