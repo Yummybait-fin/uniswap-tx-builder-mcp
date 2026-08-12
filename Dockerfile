@@ -8,7 +8,7 @@
 # Holds no keys and never signs. Reads public RPCs by default; override per
 # chain via RPC_* env vars (see src/config.ts).
 
-FROM node:26-slim@sha256:715e55e4b84e4bb0ff48e49b398a848f08e55daed8eb6a0ea1839ae53bc57583 AS builder
+FROM node:26-slim@sha256:4ebb5ace66f15a24c14c492e01a8beeed4fddf970a856109f5126e703e5fe503 AS builder
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
@@ -16,7 +16,7 @@ COPY tsconfig.json ./
 COPY src/ ./src/
 RUN npx tsc
 
-FROM node:26-slim@sha256:715e55e4b84e4bb0ff48e49b398a848f08e55daed8eb6a0ea1839ae53bc57583
+FROM node:26-slim@sha256:4ebb5ace66f15a24c14c492e01a8beeed4fddf970a856109f5126e703e5fe503
 LABEL io.modelcontextprotocol.server.name="io.github.Yummybait-fin/uniswap-tx-builder-mcp"
 WORKDIR /app
 ENV NODE_ENV=production
