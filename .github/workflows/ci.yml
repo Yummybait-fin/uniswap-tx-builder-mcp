@@ -32,7 +32,7 @@ jobs:
       # Feeds the code-quality coverage dashboard + PR summaries. Skipped where
       # the token can't write code-quality: fork/dependabot PRs and release
       # runs (release.yml calls this workflow with contents: read only).
-      - uses: actions/upload-code-coverage@d8e329117199404bba6fc81efe8093dc7c015e34 # v1.4.2
+      - uses: actions/upload-code-coverage@2b21a77928be8d5168c2b9581a67f2adbebacc52 # v1.4.4
         if: github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')
         with:
           file: coverage/cobertura-coverage.xml
